@@ -3,6 +3,10 @@
 
 from vllm import LLM, SamplingParams
 
+# fix the seed
+import random
+random.seed(42)
+
 # Sample prompts.
 prompts = [
     "Hello, my name is",
@@ -16,7 +20,8 @@ sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 
 def main():
     # Create an LLM.
-    llm = LLM(model="facebook/opt-125m")
+    # llm = LLM(model="facebook/opt-125m")
+    llm = LLM(model="Qwen/Qwen2.5-1.5B-Instruct", dtype="float32", download_dir="./models/Qwen2.5-1.5B-Instruct")
     # Generate texts from the prompts.
     # The output is a list of RequestOutput objects
     # that contain the prompt, generated text, and other information.
