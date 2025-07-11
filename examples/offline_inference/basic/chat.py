@@ -9,7 +9,9 @@ def create_parser():
     parser = FlexibleArgumentParser()
     # Add engine args
     EngineArgs.add_cli_args(parser)
-    parser.set_defaults(model="meta-llama/Llama-3.2-1B-Instruct")
+    parser.set_defaults(model="nvidia/Llama-3.1-Nemotron-8B-UltraLong-1M-Instruct")
+    # parser.set_defaults(max_model_len=4096)
+    # parser.set_defaults(tensor_parallel_size=4)
     # Add sampling params
     sampling_group = parser.add_argument_group("Sampling parameters")
     sampling_group.add_argument("--max-tokens", type=int)
