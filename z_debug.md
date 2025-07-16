@@ -20,10 +20,26 @@
 - **Solution:** I request a node, and build vllm from source on the node.
 - **Status:** solved.
 
-## 5. Ray Socket Path Length Issue ⏳
+## 5. Ray Socket Path Length Issue ✅
 - **Problem:** ```OSError: validate_socket_filename failed: AF_UNIX path length cannot exceed 107 bytes: /var/tmp/pbs.5513403.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov/ray/session_2025-07-14_05-22-38_664188_503911/sockets/plasma_store```
 - **Solution:** Set `export TMPDIR=/tmp` before running vLLM to use shorter socket paths.
 - **Status:** investigating.
+
+## 6. Docker container is not supported on Polaris ✅
+- **Problem:** Polaris does not support docker container. Instead, it uses Apptainer to run container.
+- **Solution:** I need to transfer Docker image of vLLM to Apptainer image, and then use it to run the cluster.
+- **Status:** solved.
+
+## 7. Apptainer build issue ✅
+- **Problem:** ```ERROR  : Installation issue: starter-suid doesn't have setuid bit set```
+- **Solution:** Always use the --fakeroot flag on Polaris compute nodes.
+- **Status:** solved.
+
+## 8. Ray didn't start while using run_cluster_apptainer.sh ⏳
+- **Problem:** Ray didn't start while using run_cluster_apptainer.sh.
+- **Solution:** I start the apptainer shell, and then start the Ray cluster.
+- **Status:** investigating.
+
 
 
 # Using command line
@@ -52,4 +68,47 @@ python3 -m vllm.entrypoints.openai.api_server --model "nvidia/Llama-3_1-Nemotron
 ```bash
 # 2. request debug node on Polaris
 qsub -I -l select=1 -l filesystems=home:eagle -l walltime=1:00:00 -q debug -A Picom_AI_Accelerator
+```
+
+### set up the cluster
+```bash
+# 1. get the node info
+cat $PBS_NODEFILE
+
+# 2. get the ip address of the nodes
+getent hosts `hostname`
+
+# 3. ssh the other nodes
+ssh x3006c0s19b0n0
+
+# 4. start the head node
+bash examples/online_serving/run_cluster_apptainer.sh  vllm/vllm-openai 10.201.2.10 --head /home/shouwei/projects/hf_models --env VLLM_HOST_IP=10.201.2.10
+
+# 5. start the worker nodes
+bash examples/online_serving/run_cluster_apptainer.sh  vllm/vllm-openai 10.201.2.10 --worker /home/shouwei/projects/hf_models --env VLLM_HOST_IP=10.201.1.237
+
+# 6. check the instance list
+ml use /soft/modulefiles && ml spack-pe-base/0.8.1 && ml use /soft/spack/testing/0.8.1/modulefiles && ml apptainer/main && apptainer instance list
+
+# 7. enter the instance
+apptainer shell "instance://${INSTANCE_NAME}"
+
+# 8. check the Ray cluster
+ray status # check the problem 8
+    # if the Ray cluster is not started, you can start it by:
+    ray start --block --disable-usage-stats --temp-dir=/tmp/ray --head --port=6379 --node-ip-address=${HEAD_NODE_ADDRESS}
+    ray start --block --disable-usage-stats --temp-dir=/tmp/ray --address=${HEAD_NODE_ADDRESS}:6379
+
+
+# 9. start to serve the model
+vllm serve gradientai/Llama-3-8B-Instruct-Gradient-1048k --swap-space 16 --disable-log-requests --tensor_parallel_size 4 --max_model_len 65000 --pipeline-parallel-size 2
+
+# 10. stop the instance
+apptainer instance stop vllm-openai-instance
+
+# 11. start the instance
+apptainer instance start vllm-openai-instance
+
+# 12. check the Ray cluster
+ray status
 ```
