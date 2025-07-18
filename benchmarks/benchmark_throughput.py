@@ -602,7 +602,7 @@ def create_argument_parser():
         "--backend",
         type=str,
         choices=["vllm", "hf", "mii", "vllm-chat"],
-        default="vllm",
+        default="vllm",`    `
     )
     parser.add_argument(
         "--dataset-name",

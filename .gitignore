@@ -4,6 +4,10 @@
 # models
 models/
 
+core.*
+*.sh.o*
+*.sh.e*
+
 # vllm-flash-attn built from source
 vllm/vllm_flash_attn/*
 
@@ -12,6 +16,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+pyrightconfig.json
+ray_tmp/
 # C extensions
 *.so
 
@@ -210,3 +216,4 @@ csrc/moe/marlin_moe_wna16/kernel_*
 # debug
 zbug.py
 vllm_profile*/
+z_debug.py
