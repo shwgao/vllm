@@ -74,6 +74,10 @@ vllm bench throughput --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --da
 export TMPDIR=/tmp
 python3 -m vllm.entrypoints.openai.api_server --model "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1" --trust-remote-code --seed=1 --host="0.0.0.0" --port=5000 --served-model-name "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1" --tensor-parallel-size=8 --max-model-len=32768 --gpu-memory-utilization 0.95 --enforce-eager
 
+# 4. profile the model
+export PATH=/soft/compilers/cudatoolkit/cuda-12.9.1/bin:$PATH
+
+CUDA_VISIBLE_DEVICES=0,1 nsys profile -o nsys_1_128k -t nvtx,cuda --force-overwrite true --trace-fork-before-exec=true --cuda-graph-trace=node vllm bench throughput --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --dataset-name random --max-model-len 130000 --tensor-parallel-size 2 --pipeline-parallel-size 1 --num-prompts 1 --input-len 128000 --output-len 128 --trust-remote-code --enforce_eager
 ```
 
 ## request debug node on Polaris
@@ -85,6 +89,12 @@ qsub -I -l select=1 -l filesystems=home:eagle -l walltime=1:00:00 -q debug -A Pi
 ## set up the cluster using customized environment
 ```bash
 # see z_run_cluster.sh
+
+# submit the job
+qsub z_run_cluster.sh
+
+# check the job status
+qstat -u $USER
 ```
 
 1. NCCL memory issue ✅

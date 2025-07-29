@@ -217,3 +217,11 @@ csrc/moe/marlin_moe_wna16/kernel_*
 zbug.py
 vllm_profile*/
 z_debug.py
+compare_total_tokens_vs_input_len_tp2_tp4.png
+throughput_output_tokens_vs_input_len.png
+throughput_requests_vs_input_len.png
+throughput_total_tokens_vs_input_len.png
+throughput_total_tokens_vs_num_prompts_times_input_len.png
+vllm_benchmark_results.json
+vllm_resource_analysis.png
+vllm_throughput_analysis.png
