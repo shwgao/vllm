@@ -70,6 +70,9 @@ python benchmarks/benchmark_serving.py     --backend vllm     --model gradientai
 # 2. benchmark throughput
 vllm bench throughput --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --dataset-name random --max-model-len 920000 --tensor-parallel-size 4 --pipeline-parallel-size 1 --num-prompts 20 --input-len 32000 --output-len 128 --trust-remote-code --enforce-eager --max-num-seqs 10 --max-num-batched-tokens 256
 
+# 3. benchmark latency
+vllm bench latency 
+
 # 3. Fixed command for Nemotron Ultra (with TMPDIR fix for Ray socket path issue)
 export TMPDIR=/tmp
 python3 -m vllm.entrypoints.openai.api_server --model "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1" --trust-remote-code --seed=1 --host="0.0.0.0" --port=5000 --served-model-name "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1" --tensor-parallel-size=8 --max-model-len=32768 --gpu-memory-utilization 0.95 --enforce-eager
