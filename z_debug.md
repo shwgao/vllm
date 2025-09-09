@@ -63,9 +63,9 @@ echo $HF_HOME
 ```bash
 # 1. benchmarks serving
 # server
-vllm serve gradientai/Llama-3-8B-Instruct-Gradient-1048k --swap-space 16 --disable-log-requests --tensor_parallel_size 1 --max_model_len 65000
+vllm serve gradientai/Llama-3-8B-Instruct-Gradient-1048k --swap-space 16 --disable-log-requests --data_parallel_size 1 --max_model_len 65000
 # client
-python benchmarks/benchmark_serving.py     --backend vllm     --model gradientai/Llama-3-8B-Instruct-Gradient-1048k     --dataset-name random     --dataset-path None     --random_input_len 32000 --random_output_len 128    --request-rate 1     --num-prompts 20
+python benchmarks/benchmark_serving.py     --backend vllm     --model gradientai/Llama-3-8B-Instruct-Gradient-1048k     --dataset-name random     --dataset-path None     --random_input_len 32000 --random_output_len 128    --request-rate 10     --num-prompts 20
 
 # 2. benchmark throughput
 vllm bench throughput --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --dataset-name random --max-model-len 920000 --tensor-parallel-size 4 --pipeline-parallel-size 1 --num-prompts 20 --input-len 32000 --output-len 128 --trust-remote-code --enforce-eager --max-num-seqs 10 --max-num-batched-tokens 256
