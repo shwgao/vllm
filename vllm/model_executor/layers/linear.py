@@ -14,7 +14,13 @@ from vllm.distributed import (divide, get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size,
                               split_tensor_along_last_dim,
                               tensor_model_parallel_all_gather,
-                              tensor_model_parallel_all_reduce)
+                              tensor_model_parallel_all_reduce,
+                              get_dtp_group_world_size,
+                              get_dtp_group_state, 
+                              get_dtp_group,
+                              get_dynamic_tensor_model_parallel_rank,
+                              dynamic_tensor_model_parallel_all_reduce,
+                              )
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig, QuantizeMethodBase)
@@ -29,6 +35,9 @@ from vllm.model_executor.parameter import (BasevLLMParameter,
 # yapf: enable
 from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
+
+from contextlib import contextmanager
+from vllm.config import get_current_vllm_config
 
 logger = init_logger(__name__)
 
@@ -273,6 +282,39 @@ class LinearBase(torch.nn.Module):
         raise NotImplementedError
 
 
+@contextmanager
+def resharding(layer: LinearBase):
+    """
+    Reshard the weight matrix if the DTP group is used.
+    If the DTP group is not used, do nothing.
+    When outside the context, the weight matrix is not resharded.
+    The shape of the model weight matrix is (input_size, output_size).
+    For ColumnParallelLinear and RowParallelLinear, the weight matrix is 
+    sharded along different dimensions.
+    """
+    if not get_dtp_group_state():
+        yield
+        return
+
+    dtp_size = get_dtp_group_world_size()
+    dtp_rank = get_dtp_group().rank
+    old_weight = layer.weight
+
+    if isinstance(layer, ColumnParallelLinear):
+        shard_size = divide(layer.output_size, dtp_size)
+        layer.weight = Parameter(old_weight[dtp_rank * shard_size:(dtp_rank + 1) * shard_size, :])
+    elif isinstance(layer, RowParallelLinear):
+        shard_size = divide(layer.input_size, dtp_size)
+        layer.weight = Parameter(old_weight[:, dtp_rank * shard_size:(dtp_rank + 1) * shard_size])
+    else:
+        raise ValueError(f"Unimplemented DTP layer type: {type(layer)}")
+
+    try:
+        yield
+    finally:
+        layer.weight = old_weight
+
+
 class ReplicatedLinear(LinearBase):
     """Replicated linear layer.
 
@@ -507,7 +549,8 @@ class ColumnParallelLinear(LinearBase):
 
         # Matrix multiply.
         assert self.quant_method is not None
-        output_parallel = self.quant_method.apply(self, input_, bias)
+        with resharding(self):
+            output_parallel = self.quant_method.apply(self, input_, bias)
         if self.gather_output:
             # All-gather across the partitions.
             output = tensor_model_parallel_all_gather(output_parallel)
@@ -1299,7 +1342,7 @@ class RowParallelLinear(LinearBase):
         if self.input_is_parallel:
             input_parallel = input_
         else:
-            tp_rank = get_tensor_model_parallel_rank()
+            tp_rank = get_tensor_model_parallel_rank() if not get_dtp_group_state() else get_dynamic_tensor_model_parallel_rank()
             splitted_input = split_tensor_along_last_dim(
                 input_, num_partitions=self.tp_size)
             input_parallel = splitted_input[tp_rank].contiguous()
@@ -1308,12 +1351,17 @@ class RowParallelLinear(LinearBase):
         assert self.quant_method is not None
         # Only fuse bias add into GEMM for rank 0 (this ensures that
         # bias will not get added more than once in TP>1 case)
+        # TODO: bias maybe wrong when dtp is used
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
-        output_parallel = self.quant_method.apply(self,  # shouwei apply weigths resharding before here!!!
-                                                  input_parallel,
-                                                  bias=bias_)
+        with resharding(self):
+            output_parallel = self.quant_method.apply(self,  # shouwei apply weigths resharding before here!!!
+                                                    input_parallel,
+                                                    bias=bias_)
         if self.reduce_results and self.tp_size > 1:
-            output = tensor_model_parallel_all_reduce(output_parallel)
+            if get_dtp_group_state():
+                output = dynamic_tensor_model_parallel_all_reduce(output_parallel)
+            else:
+                output = tensor_model_parallel_all_reduce(output_parallel)
         else:
             output = output_parallel
 

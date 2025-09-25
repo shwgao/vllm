@@ -415,6 +415,13 @@ def init_worker_distributed_environment(
 
     ensure_model_parallel_initialized(parallel_config.tensor_parallel_size,
                                       parallel_config.pipeline_parallel_size)
+    
+    logger.info(f"shouwei modified: add more parallel groups \
+                for dynamic parallel switch")
+    logger.info(f"shouwei modified: {envs.CUDA_VISIBLE_DEVICES}")
+    from vllm.distributed.parallel_state import add_more_parallel_groups
+    add_more_parallel_groups(parallel_config.tensor_parallel_size,
+                                      parallel_config.pipeline_parallel_size)
 
     ensure_kv_transfer_initialized(vllm_config)
 

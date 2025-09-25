@@ -34,6 +34,7 @@ from vllm.attention import Attention, AttentionType
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig
 from vllm.distributed import get_pp_group, get_tensor_model_parallel_world_size
+from vllm.distributed import get_dtp_group_world_size, get_dtp_group_state
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (MergedColumnParallelLinear,
@@ -56,6 +57,7 @@ from .utils import (AutoWeightsLoader, PPMissingLayer, extract_layer_index,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
 
+from contextlib import contextmanager
 
 class LlamaMLP(nn.Module):
 
@@ -145,6 +147,13 @@ class LlamaAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
+        
+        # shouwei modified
+        self.dtp_size = get_dtp_group_world_size()
+        self.dtp_num_heads = self.total_num_heads // self.dtp_size
+        self.dtp_num_kv_heads = self.total_num_kv_heads // self.dtp_size
+        self.dtp_q_size = self.dtp_num_heads * self.head_dim
+        self.dtp_kv_size = self.dtp_num_kv_heads * self.head_dim
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size=hidden_size,
@@ -222,7 +231,26 @@ class LlamaAttention(nn.Module):
             is_neox_style=is_neox_style,
             partial_rotary_factor=self.partial_rotary_factor,
         )
-
+    
+    @contextmanager
+    def dtp_context(self):
+        """Temporarily switch to DTP context, modifying num_heads and num_kv_heads
+        to their DTP counterparts. Restores original values upon exit.
+        """
+        if not get_dtp_group_state():
+            yield
+            return
+        
+        original_num_heads = self.num_heads
+        original_num_kv_heads = self.num_kv_heads
+        try:
+            self.attn.num_heads = self.dtp_num_heads
+            self.attn.num_kv_heads = self.dtp_num_kv_heads
+            yield
+        finally:
+            self.attn.num_heads = original_num_heads
+            self.attn.num_kv_heads = original_num_kv_heads
+        
 
 class LlamaDecoderLayer(nn.Module):
 
@@ -289,6 +317,48 @@ class LlamaDecoderLayer(nn.Module):
                                        eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
+        
+        self.dtp_size = get_dtp_group_world_size()
+        
+    @contextmanager
+    def dtp_context(self):
+        """Temporarily switch to DTP context.
+
+        - Delegates head/size adjustments to `self.self_attn.dtp_context()`.
+        - Locally overrides `tp_size` for RowParallelLinear modules and restores
+          them safely with try/finally.
+        """
+        if not get_dtp_group_state():
+            yield
+            return
+
+        original_o_proj_tp = self.self_attn.o_proj.tp_size
+        original_down_proj_tp = self.mlp.down_proj.tp_size
+        
+        original_num_heads = self.self_attn.num_heads
+        original_num_kv_heads = self.self_attn.num_kv_heads
+        
+        original_q_size = self.self_attn.q_size
+        original_kv_size = self.self_attn.kv_size
+        try:
+            self.self_attn.o_proj.tp_size = self.dtp_size
+            self.mlp.down_proj.tp_size = self.dtp_size
+            
+            self.self_attn.attn.num_heads = self.self_attn.dtp_num_heads
+            self.self_attn.attn.num_kv_heads = self.self_attn.dtp_num_kv_heads
+            
+            self.self_attn.q_size = self.self_attn.dtp_q_size
+            self.self_attn.kv_size = self.self_attn.dtp_kv_size
+            yield
+        finally:
+            self.self_attn.o_proj.tp_size = original_o_proj_tp
+            self.mlp.down_proj.tp_size = original_down_proj_tp
+            
+            self.self_attn.attn.num_heads = original_num_heads
+            self.self_attn.attn.num_kv_heads = original_num_kv_heads
+            
+            self.self_attn.q_size = original_q_size
+            self.self_attn.kv_size = original_kv_size
 
     def forward(
         self,
@@ -297,20 +367,21 @@ class LlamaDecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
-        hidden_states = self.self_attn(positions=positions,
-                                       hidden_states=hidden_states)
+        with self.dtp_context():
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(
+                    hidden_states, residual)
+            hidden_states = self.self_attn(positions=positions,
+                                        hidden_states=hidden_states)
 
-        # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
-        return hidden_states, residual
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+            return hidden_states, residual
 
 
 @support_torch_compile

@@ -888,6 +888,12 @@ def get_pp_group() -> GroupCoordinator:
     return _PP
 
 
+_DTP: Optional[GroupCoordinator] = None
+
+def get_dtp_group() -> GroupCoordinator:
+    assert _DTP is not None, ("distributed tensor parallel group is not initialized")
+    return _DTP
+
 # kept for backward compatibility
 get_pipeline_model_parallel_group = get_pp_group
 
@@ -1122,6 +1128,100 @@ def ensure_model_parallel_initialized(
         f"{pipeline_model_parallel_size=}")
 
 
+def get_dtp_group_world_size() -> int:
+    assert _DTP is not None, ("distributed tensor parallel group is not initialized")
+    return _DTP.world_size
+
+
+def get_dynamic_tensor_model_parallel_rank() -> int:
+    return get_dtp_group().rank_in_group
+
+
+# _DTP: Optional[GroupCoordinator] = None
+_DTP_STATE = True  # decide whether to use the DTP group
+
+
+def get_dtp_group_state() -> bool:
+    return _DTP_STATE
+
+
+def set_dtp_group_state(state: bool) -> None:
+    global _DTP_STATE
+    _DTP_STATE = state
+
+
+def get_dtp_group() -> GroupCoordinator:
+    assert _DTP is not None, ("dynamic tensor parallel group is not initialized")
+    return _DTP
+  
+  
+def add_more_parallel_groups(
+    tensor_model_parallel_size: int,
+    pipeline_model_parallel_size: int,
+    backend: Optional[str] = None,
+) -> None:
+    """Helper to add more parallel groups.
+    Initially, all the parallel groups are initialized based on DP. 
+    Now, I need to add a extra parallel group based on TP, so that,
+    I can switch the parallel group dynamically during runtime.
+    all TP groups of all DP groups are merged into a single TP group, called _DTP.
+    """
+    # ensure model parallel is initialized
+    assert model_parallel_is_initialized(), (
+        "Model parallel groups must be initialized before adding more groups")
+    
+    # get current config
+    world_size = torch.distributed.get_world_size()
+    rank = torch.distributed.get_rank()
+    backend = backend or torch.distributed.get_backend(get_world_group().device_group)
+    
+    # get data parallel size
+    data_parallel_size = 1
+    from vllm.config import get_current_vllm_config
+    config = get_current_vllm_config()
+    if config is not None:
+        data_parallel_size = config.parallel_config.data_parallel_size
+    
+    # check if _DTP groups already exist
+    global _DTP
+    if _DTP is not None:
+        logger.warning("_DTP groups already exist, skipping creation")
+        return
+    
+    all_ranks = torch.arange(world_size).reshape(
+        -1, data_parallel_size, pipeline_model_parallel_size,
+        tensor_model_parallel_size)
+
+    # Merge all DP x TP participants per pipeline stage into one communicator
+    # so each PP stage owns a cross-DP TP communicator.
+    group_ranks = all_ranks.transpose(1, 2).reshape(
+        -1, pipeline_model_parallel_size, data_parallel_size * tensor_model_parallel_size)
+    group_ranks_list: list[list[int]] = []
+    for slab in group_ranks.unbind(0):  # each slab: [PP, DP*TP]
+        for pp_row in slab.unbind(0):   # each row: [DP*TP]
+            group_ranks_list.append(pp_row.tolist())
+
+    # Use the correct local GPU index for binding device communicators.
+    local_rank = get_world_group().local_rank
+    assert 0 <= local_rank < torch.cuda.device_count(), (
+        f"Invalid local_rank {local_rank} with device_count={torch.cuda.device_count()}")
+
+    _DTP = init_model_parallel_group(
+        group_ranks_list,
+        local_rank,
+        backend,
+        use_message_queue_broadcaster=True,
+        group_name="dtp"
+    )
+
+    logger.info(
+        "Created _DTP groups. Current rank %s: "
+        "DTP rank %s (if in group)",
+        rank,
+        _DTP.rank_in_group if _DTP and rank in _DTP.ranks else "N/A",
+    )
+
+
 def prepare_communication_buffer_for_model(model: torch.nn.Module):
     """Prepare the communication buffer for the model.
     Traditional communication libraries like NCCL are almost
@@ -1137,6 +1237,10 @@ def prepare_communication_buffer_for_model(model: torch.nn.Module):
         _DP.prepare_communication_buffer_for_model(model)
     if _EP is not None:
         _EP.prepare_communication_buffer_for_model(model)
+        
+    logger.info(f"shouwei modified: prepare_communication_buffer_for_model() is called")
+    if _DTP is not None:
+        _DTP.prepare_communication_buffer_for_model(model)
 
 
 def model_parallel_is_initialized():

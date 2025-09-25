@@ -56,9 +56,15 @@ class CudaCommunicator(DeviceCommunicatorBase):
         self.qr_comm: Optional[QuickAllReduce] = None
         if use_custom_allreduce and self.world_size > 1:
             # Initialize a custom fast all-reduce implementation.
+            logger.info("shouwei modified the custom all-reduce, added"
+                        "unique_name in CustomAllreduce")
+            # Skip custom all-reduce for cross-DP groups (dtp) as they may have
+            # different CUDA_VISIBLE_DEVICES settings that cause P2P cache conflicts
+            # if "dtp" not in unique_name:
             self.ca_comm = CustomAllreduce(
                 group=self.cpu_group,
                 device=self.device,
+                unique_name=unique_name,
             )
 
             if current_platform.is_rocm():

@@ -420,6 +420,28 @@ class WorkerProc:
         distributed_init_method: str,
         input_shm_handle: Handle,
     ):
+        # logger.info("shouwei moved the CUDA_VISIBLE_DEVICES config "
+        #             "from multiproc_executor.py to WorkerProc.__init__")
+        # import torch
+        # print(f"Device count: {torch.cuda.device_count()}")
+        # for i in range(torch.cuda.device_count()):
+        #     print(f"Device {i}: {torch.cuda.get_device_name(i)}")
+        # local_dp_rank = vllm_config.parallel_config.data_parallel_rank
+        # try:
+        #     from vllm.platforms import current_platform
+        #     device_control_env_var = current_platform.device_control_env_var
+        #     world_size = vllm_config.parallel_config.world_size
+        #     os.environ[device_control_env_var] = ",".join(
+        #         str(current_platform.device_id_to_physical_device_id(i))
+        #         for i in range(local_dp_rank *
+        #                        world_size, (local_dp_rank + 1) * world_size))
+        # except IndexError as e:
+        #     raise Exception(
+        #         f"Error setting {device_control_env_var}: "
+        #         f"local range: [{local_dp_rank * world_size}, "
+        #         f"{(local_dp_rank + 1) * world_size}) "
+        #         f"base value: \"{os.getenv(device_control_env_var)}\"") from e
+            
         self.rank = rank
         wrapper = WorkerWrapperBase(vllm_config=vllm_config, rpc_rank=rank)
         # TODO: move `init_worker` to executor level as a collective rpc call

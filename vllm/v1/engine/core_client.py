@@ -942,7 +942,7 @@ class DPAsyncMPClient(AsyncMPClient):
         resources.stats_update_task = asyncio.create_task(
             run_engine_stats_update_task())
 
-    async def add_request_async(self, request: EngineCoreRequest) -> None:
+    async def add_request_async_original(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
 
         request.current_wave = self.current_wave
@@ -956,6 +956,42 @@ class DPAsyncMPClient(AsyncMPClient):
             await self.first_req_send_socket.send(chosen_engine)
 
         await to_await
+
+        self._ensure_output_queue_task()
+        
+    async def add_request_async(self, request: EngineCoreRequest) -> None:
+        self._ensure_stats_update_task()
+
+        request.current_wave = self.current_wave
+        request.client_index = self.client_index
+        
+        # shouwei add
+        long_request_threshold = 8193
+        request.long_request = len(request.prompt_token_ids) > long_request_threshold
+        request.long_request_engines = []
+
+        chosen_engines = self.get_core_engine_for_request(request)
+        
+        # Store the selected engines in the request for potential use
+        engine_indices = []
+        for engine in chosen_engines:
+            engine_indices.append(self.core_engines.index(engine))
+        request.long_request_engines = engine_indices
+        
+        # Send request to all selected engines
+        send_tasks = []
+        for engine in chosen_engines:
+            send_tasks.append(
+                self._send_input(EngineCoreRequestType.ADD, request, engine)
+            )
+        
+        # Wait for all sends to complete
+        await asyncio.gather(*send_tasks)
+        
+        if not self.engines_running:
+            # Notify coordinator that we're sending a request
+            # Use the primary engine (first selected) for coordinator notification
+            await self.first_req_send_socket.send(chosen_engines[0])
 
         self._ensure_output_queue_task()
 
@@ -982,7 +1018,7 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
 
         assert len(self.core_engines) > 1
 
-    def get_core_engine_for_request(
+    def get_core_engine_for_request_original(
             self, request: EngineCoreRequest) -> EngineIdentity:
         # Engines are in rank order.
         if (eng_index := request.data_parallel_rank) is None:
@@ -1011,6 +1047,51 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
         # Record which engine is chosen for this request, to handle aborts.
         self.reqs_in_flight[request.request_id] = chosen_engine
         return chosen_engine
+    
+    def get_core_engine_for_request(
+            self, request: EngineCoreRequest) -> list[EngineIdentity]:
+        # Engines are in rank order.
+        engines = []
+        if (eng_index := request.data_parallel_rank) is None:
+            if not self.lb_engines:
+                return [self.core_engine]
+            
+            # Determine how many engines to select based on request type
+            # For long requests, select more engines for better parallelism
+            num_engines_to_select = request.long_request_engine_num
+            
+            num_engines = len(self.lb_engines)
+            
+            # Create a list of (engine_index, waiting_count, running_count) tuples
+            engine_loads = []
+            for i in range(num_engines):
+                idx = (self.client_index + i) % num_engines
+                counts = self.lb_engines[idx]
+                # Store waiting and running counts separately for comparison
+                waiting_count = counts[0]
+                running_count = counts[1]
+                engine_loads.append((idx, waiting_count, running_count))
+            
+            # Sort by waiting first, then by running (ascending) to get least loaded engines first
+            engine_loads.sort(key=lambda x: (x[1], x[2]))
+            
+            # Select the least loaded engines
+            selected_indices = [eng_load[0] for eng_load in engine_loads[:num_engines_to_select]]
+            
+            # Convert to engine identities
+            engines = [self.core_engines[idx] for idx in selected_indices]
+            
+            # Record which engines are chosen for this request, to handle aborts
+            # Store the primary engine (first selected) for abort handling
+            if engines:
+                self.reqs_in_flight[request.request_id] = engines[0]
+                
+        else:
+            # If specific engine index is requested, use that engine
+            engines = [self.core_engines[eng_index]]
+            self.reqs_in_flight[request.request_id] = engines[0]
+
+        return engines
 
     async def call_utility_async(self, method: str, *args) -> Any:
         # Only the result from the first engine is returned.

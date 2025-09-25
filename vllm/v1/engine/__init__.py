@@ -69,6 +69,12 @@ class EngineCoreRequest(
     # a wave finished notification is received.
     current_wave: int = 0
     priority: int = 0
+    
+    # Used for DTP case to indicate if the request a long request that needs
+    # more than one engine to finish
+    long_request: bool = False
+    long_request_engine_num: int = 2
+    long_request_engines: list[int] = []
 
 
 class EngineCoreEventType(enum.IntEnum):

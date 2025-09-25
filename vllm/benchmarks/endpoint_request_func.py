@@ -66,7 +66,9 @@ async def async_request_openai_completions(
         ("completions", "profile")
     ), "OpenAI Completions API URL must end with 'completions' or 'profile'."
 
-    async with aiohttp.ClientSession(trust_env=True,
+    # Create connector that bypasses proxy for localhost connections
+    connector = aiohttp.TCPConnector()
+    async with aiohttp.ClientSession(connector=connector,
                                      timeout=AIOHTTP_TIMEOUT) as session:
         payload = {
             "model": request_func_input.model_name \
@@ -170,7 +172,9 @@ async def async_request_openai_chat_completions(
     assert api_url.endswith(("chat/completions", "profile")), (
         "OpenAI Chat Completions API URL must end with 'chat/completions'.")
 
-    async with aiohttp.ClientSession(trust_env=True,
+    # Create connector that bypasses proxy for localhost connections
+    connector = aiohttp.TCPConnector()
+    async with aiohttp.ClientSession(connector=connector,
                                      timeout=AIOHTTP_TIMEOUT) as session:
         content = [{"type": "text", "text": request_func_input.prompt}]
         if request_func_input.multi_modal_content:
@@ -279,7 +283,9 @@ async def async_request_openai_audio(
         "OpenAI Chat Completions API URL must end with 'transcriptions' ")
     "or `translations`."
 
-    async with aiohttp.ClientSession(trust_env=True,
+    # Create connector that bypasses proxy for localhost connections
+    connector = aiohttp.TCPConnector()
+    async with aiohttp.ClientSession(connector=connector,
                                      timeout=AIOHTTP_TIMEOUT) as session:
         content = [{"type": "text", "text": request_func_input.prompt}]
         payload = {

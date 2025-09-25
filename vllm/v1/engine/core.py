@@ -94,6 +94,11 @@ class EngineCore:
                 vllm_config.scheduler_config.scheduler_cls)
         else:
             Scheduler = vllm_config.scheduler_config.scheduler_cls
+            
+        import torch
+        print(f"Device count: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"Device {i}: {torch.cuda.get_device_name(i)}")
 
         # This warning can be removed once the V1 Scheduler interface is
         # finalized and we can maintain support for scheduler classes that

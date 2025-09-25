@@ -54,7 +54,8 @@ class CustomAllreduce:
     def __init__(self,
                  group: ProcessGroup,
                  device: Union[int, str, torch.device],
-                 max_size=8192 * 1024) -> None:
+                 max_size=8192 * 1024,
+                 unique_name: str = "") -> None:
         """
         Args:
             group: the process group to work on. If None, it will use the
@@ -143,12 +144,13 @@ class CustomAllreduce:
         # this is expensive to compute at the first time
         # then we cache the result
         # On AMD GPU, p2p is always enabled between XGMI connected GPUs
-        if not current_platform.is_rocm() and not _can_p2p(rank, world_size):
-            logger.warning(
-                "Custom allreduce is disabled because your platform lacks "
-                "GPU P2P capability or P2P test failed. To silence this "
-                "warning, specify disable_custom_all_reduce=True explicitly.")
-            return
+        if 'dtp' not in unique_name:
+            if not current_platform.is_rocm() and not _can_p2p(rank, world_size):
+                logger.warning(
+                    "Custom allreduce is disabled because your platform lacks "
+                    "GPU P2P capability or P2P test failed. To silence this "
+                    "warning, specify disable_custom_all_reduce=True explicitly.")
+                return
 
         self.disabled = False
         # Buffers memory are owned by this Python class and passed to C++.
