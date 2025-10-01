@@ -1071,4 +1071,7 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
+    args.random_input_len = 8000
+    args.num_prompts = 20
+    args.random_range_ratio = 0.5
     main(args)
