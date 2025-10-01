@@ -18,6 +18,7 @@ from vllm.distributed import (divide, get_tensor_model_parallel_rank,
                               get_dtp_group_world_size,
                               get_dtp_group_state, 
                               get_dtp_group,
+                              get_dp_group,
                               get_dynamic_tensor_model_parallel_rank,
                               dynamic_tensor_model_parallel_all_reduce,
                               )
@@ -297,15 +298,15 @@ def resharding(layer: LinearBase):
         return
 
     dtp_size = get_dtp_group_world_size()
-    dtp_rank = get_dtp_group().rank
+    dp_rank = get_dp_group().rank_in_group
     old_weight = layer.weight
 
     if isinstance(layer, ColumnParallelLinear):
         shard_size = divide(layer.output_size, dtp_size)
-        layer.weight = Parameter(old_weight[dtp_rank * shard_size:(dtp_rank + 1) * shard_size, :])
+        layer.weight = Parameter(old_weight[dp_rank * shard_size:(dp_rank + 1) * shard_size, :])
     elif isinstance(layer, RowParallelLinear):
         shard_size = divide(layer.input_size, dtp_size)
-        layer.weight = Parameter(old_weight[:, dtp_rank * shard_size:(dtp_rank + 1) * shard_size])
+        layer.weight = Parameter(old_weight[:, dp_rank * shard_size:(dp_rank + 1) * shard_size])
     else:
         raise ValueError(f"Unimplemented DTP layer type: {type(layer)}")
 

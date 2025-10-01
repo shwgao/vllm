@@ -965,9 +965,9 @@ class DPAsyncMPClient(AsyncMPClient):
         request.current_wave = self.current_wave
         request.client_index = self.client_index
         
-        # shouwei add
-        long_request_threshold = 8193
-        request.long_request = len(request.prompt_token_ids) > long_request_threshold
+        # shouwei added. TODO: add interface for the threshold.
+        long_request_threshold = 819300
+        request.is_long_request = len(request.prompt_token_ids) > long_request_threshold
         request.long_request_engines = []
 
         chosen_engines = self.get_core_engine_for_request(request)

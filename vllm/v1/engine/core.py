@@ -237,9 +237,35 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
+        
+        if scheduler_output.switch_dtp_group_state:
+            self.collective_rpc("worker_set_dtp_group_state", args=(True,))
+        
+        # Handle long request synchronization
+        # Only send ready signal when we're actually executing the long request
+        if (scheduler_output.pending_long_request_sync_id and
+            not self.scheduler.sync_already):
+            # Get the single sync_id from the set
+            sync_id = scheduler_output.pending_long_request_sync_id
+            logger.debug(f"Engine {self.engine_index} executing long request {sync_id}")
+            self.output_queue.put_nowait(
+                (-1, EngineCoreOutputs(engine_index=self.engine_index, 
+                                       long_request_ready=sync_id)))
+            self.scheduler.sync_already = True
+        
         model_output = self.execute_model(scheduler_output)
+        # TODO: we can update the _DTP status within this function
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output)  # type: ignore
+        
+        if engine_core_outputs:
+            if engine_core_outputs[0].switch_dtp_group_state:
+                self.collective_rpc("worker_set_dtp_group_state", args=(False,))
+        
+        if self.scheduler.long_request_finished_sync:
+            self.output_queue.put_nowait((-1, EngineCoreOutputs(
+                long_request_complete=scheduler_output.pending_long_request_sync_id)))
+            self.scheduler.long_request_finished_sync = False
 
         return (engine_core_outputs,
                 scheduler_output.total_num_scheduled_tokens > 0)
@@ -916,6 +942,11 @@ class DPEngineCoreProc(EngineCoreProc):
                     logger.debug("EngineCore starting idle loop for wave %d.",
                                  new_wave)
                     self.engines_running = True
+        elif request_type == EngineCoreRequestType.START_LONG_REQUEST:
+            eng_indices, sync_id = request
+            logger.debug(f"Engine {self.engine_index} starting long request {sync_id}")
+            if self.engine_index in eng_indices:
+                self.scheduler.long_request_execution_mode = True
         else:
             super()._handle_client_request(request_type, request)
 
@@ -970,6 +1001,35 @@ class DPEngineCoreProc(EngineCoreProc):
                         (client_index,
                          EngineCoreOutputs(wave_complete=self.current_wave)))
                 self.current_wave += 1
+
+    def _process_engine_step(self) -> bool:
+        """Called only when there are unfinished local requests.
+
+        Override to ensure that upon long-request completion, only the last
+        DP rank enqueues request outputs back to the client.
+        """
+
+        # Step the engine core to get outputs and executed flag.
+        outputs, model_executed = self.step_fn()
+
+        # If the long request just completed this step, only the last DP rank
+        # should forward the request results to the client.
+        try:
+            dp_size = self.vllm_config.parallel_config.data_parallel_size
+            is_long_req_finish_step = getattr(self.scheduler,
+                                              "long_request_finished_sync",
+                                              False)
+            if is_long_req_finish_step and self.dp_rank != dp_size - 1:
+                outputs = {}
+        except Exception:
+            # Best effort gating; do not disrupt normal execution.
+            pass
+
+        # Put EngineCoreOutputs into the output queue.
+        for output in (outputs.items() if outputs else ()): 
+            self.output_queue.put_nowait(output)
+
+        return model_executed
 
     def _has_global_unfinished_reqs(self, local_unfinished: bool) -> bool:
 

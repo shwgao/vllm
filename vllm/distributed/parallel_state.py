@@ -1138,7 +1138,7 @@ def get_dynamic_tensor_model_parallel_rank() -> int:
 
 
 # _DTP: Optional[GroupCoordinator] = None
-_DTP_STATE = True  # decide whether to use the DTP group
+_DTP_STATE = False  # decide whether to use the DTP group
 
 
 def get_dtp_group_state() -> bool:

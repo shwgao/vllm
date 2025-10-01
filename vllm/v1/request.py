@@ -36,6 +36,8 @@ class Request:
         structured_output_request: Optional["StructuredOutputRequest"] = None,
         cache_salt: Optional[str] = None,
         priority: int = 0,
+        is_long_request: bool = False,
+        long_request_sync_id: Optional[str] = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -80,6 +82,10 @@ class Request:
         self.spec_token_ids: list[int] = []
         self.num_computed_tokens = 0
         self.cache_salt: Optional[str] = cache_salt
+        
+        # Long request synchronization
+        self.is_long_request: bool = is_long_request
+        self.long_request_sync_id: Optional[str] = long_request_sync_id
 
         # Multi-modal related
         self.mm_positions = multi_modal_placeholders or []
@@ -131,6 +137,8 @@ class Request:
                     if request.sampling_params else None,
             cache_salt=request.cache_salt,
             priority=request.priority,
+            is_long_request=request.is_long_request,
+            long_request_sync_id=request.request_id,
         )
 
     def append_output_token_ids(

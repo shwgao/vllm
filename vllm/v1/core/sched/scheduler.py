@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+from socket import if_nametoindex
 import time
 from collections import defaultdict
 from collections.abc import Iterable
@@ -34,6 +35,8 @@ from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
+
+from vllm.distributed.parallel_state import set_dtp_group_state
 
 logger = init_logger(__name__)
 
@@ -115,6 +118,13 @@ class Scheduler(SchedulerInterface):
         # requests so that they can free the cached states for those requests.
         # This is flushed at the end of each scheduling step.
         self.finished_req_ids: set[str] = set()
+        
+        # Long request synchronization state
+        self.pending_long_request_sync_id: Optional[str] = None
+        # waiting for the coordinator to start the execution mode
+        self.long_request_execution_mode: bool = False
+        self.sync_already: bool = False
+        self.long_request_finished_sync: bool = False
 
         # KV Connector: requests in process of async KV loading or recving
         self.finished_recving_kv_req_ids: set[str] = set()
@@ -161,7 +171,7 @@ class Scheduler(SchedulerInterface):
             enable_kv_cache_events=self.enable_kv_cache_events,
         )
         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
-
+    
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
         # There's no "decoding phase" nor "prefill phase" in the scheduler.
@@ -173,6 +183,10 @@ class Scheduler(SchedulerInterface):
         # num_tokens_with_spec. This is general enough to cover
         # chunked prefills, prefix caching, speculative decoding,
         # and the "jump decoding" optimization in the future.
+        
+        # Check if we're in long request execution mode
+        if self.long_request_execution_mode:
+            return self._schedule_long_request_exclusive()
 
         scheduled_new_reqs: list[Request] = []
         scheduled_resumed_reqs: list[Request] = []
@@ -356,6 +370,15 @@ class Scheduler(SchedulerInterface):
                         self.waiting.pop_request()
                         skipped_waiting_requests.prepend_request(request)
                         continue
+                    
+                # Shouwei's note: Skip the long request and wait for the coordinator 
+                # to start the execution mode
+                if request.is_long_request:
+                    self.waiting.pop_request()
+                    skipped_waiting_requests.prepend_request(request)
+                    if self.pending_long_request_sync_id is None:
+                        self.pending_long_request_sync_id = request.long_request_sync_id
+                    continue
 
                 # Check that adding the request still respects the max_loras
                 # constraint.
@@ -533,6 +556,7 @@ class Scheduler(SchedulerInterface):
             structured_output_request_ids,
             scheduled_spec_decode_tokens,
         )
+        
         # Construct the scheduler output.
         new_reqs_data = [
             NewRequestData.from_request(req,
@@ -562,6 +586,7 @@ class Scheduler(SchedulerInterface):
             free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
+            pending_long_request_sync_id=self.pending_long_request_sync_id,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:
@@ -579,6 +604,136 @@ class Scheduler(SchedulerInterface):
 
         self._update_after_schedule(scheduler_output)
         return scheduler_output
+    
+    def _schedule_long_request_exclusive(self) -> SchedulerOutput:
+        """Schedule only the long request, preempting all other running requests."""
+        logger.debug(f"Scheduling long request {self.pending_long_request_sync_id} exclusively")
+        
+        # Check if the long request is already in the running queue
+        long_request = None
+        is_already_running = False
+        switch_dtp_group_state = False
+        
+        if self.running and self.running[0].long_request_sync_id == self.pending_long_request_sync_id:
+            long_request = self.running[0]
+            is_already_running = True
+        else:
+            # Find the long request in waiting queue
+            for req in self.waiting:
+                if req.long_request_sync_id == self.pending_long_request_sync_id:
+                    long_request = req
+                    break
+            
+            if long_request is None:
+                logger.error(f"Long request {self.pending_long_request_sync_id} not found")
+                return self._create_empty_scheduler_output()
+            
+            # Preempt all running requests if any
+            if self.running:
+                preempted_reqs = []
+                for req in self.running:
+                    self.kv_cache_manager.free(req)
+                    req.status = RequestStatus.PREEMPTED
+                    req.num_computed_tokens = 0
+                    if self.log_stats:
+                        req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
+                    self.waiting.prepend_request(req)
+                    preempted_reqs.append(req)
+        
+                # Clear running queue
+                self.running.clear()
+            
+            # Add long request to running queue
+            self.waiting.remove_request(long_request)
+            self.running.append(long_request)
+            long_request.status = RequestStatus.RUNNING
+            
+            # Shouwei's note: set the DTP group state to true
+            switch_dtp_group_state = True
+            
+            logger.info(f"Long request {self.pending_long_request_sync_id} is now running")
+        
+        # Allocate resources for long request
+        num_new_tokens = long_request.num_tokens - long_request.num_computed_tokens
+        num_new_tokens = min(num_new_tokens, self.max_num_scheduled_tokens)
+        new_blocks = self.kv_cache_manager.allocate_slots(
+            long_request, num_new_tokens, num_lookahead_tokens=self.num_lookahead_tokens)
+        
+        if new_blocks is None:
+            logger.error(f"Failed to allocate resources for long request {self.pending_long_request_sync_id}")
+            # Reset mode and return empty schedule
+            self.long_request_execution_mode = False
+            self.pending_long_request_sync_id = None
+            return self._create_empty_scheduler_output()
+        
+        # Create scheduler output based on whether request is already running
+        if is_already_running:
+            # Request is already running, use cached data to avoid duplicate addition
+            new_reqs_data = []
+            cached_reqs_data = CachedRequestData(
+                req_ids=[long_request.request_id],
+                resumed_from_preemption=[False],
+                new_token_ids=[[]],
+                new_block_ids=[new_blocks.get_block_ids()],
+                num_computed_tokens=[long_request.num_computed_tokens],
+            )
+        else:
+            # New request, mark as scheduled_new_reqs
+            new_reqs_data = [NewRequestData.from_request(long_request, new_blocks.get_block_ids())]
+            cached_reqs_data = CachedRequestData(
+                req_ids=[],
+                resumed_from_preemption=[],
+                new_token_ids=[],
+                new_block_ids=[],
+                num_computed_tokens=[],
+            )
+        
+        scheduler_output = SchedulerOutput(
+            scheduled_new_reqs=new_reqs_data,
+            scheduled_cached_reqs=cached_reqs_data,
+            num_scheduled_tokens={long_request.request_id: num_new_tokens},
+            total_num_scheduled_tokens=num_new_tokens,
+            scheduled_spec_decode_tokens={},
+            scheduled_encoder_inputs={},
+            num_common_prefix_blocks=[0] * len(self.kv_cache_config.kv_cache_groups),
+            finished_req_ids=self.finished_req_ids,
+            free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
+            structured_output_request_ids={},
+            grammar_bitmask=None,
+            pending_long_request_sync_id=None,
+            switch_dtp_group_state=switch_dtp_group_state,
+        )
+        
+        # Update request state
+        if long_request.num_cached_tokens < 0:
+            long_request.num_cached_tokens = 0
+        
+        self._update_after_schedule(scheduler_output)
+          
+        return scheduler_output
+    
+    def _create_empty_scheduler_output(self) -> SchedulerOutput:
+        """Create an empty scheduler output."""
+        return SchedulerOutput(
+            scheduled_new_reqs=[],
+            scheduled_cached_reqs=CachedRequestData(
+                req_ids=[],
+                resumed_from_preemption=[],
+                new_token_ids=[],
+                new_block_ids=[],
+                num_computed_tokens=[],
+            ),
+            num_scheduled_tokens={},
+            total_num_scheduled_tokens=0,
+            scheduled_spec_decode_tokens={},
+            scheduled_encoder_inputs={},
+            num_common_prefix_blocks=[0] * len(self.kv_cache_config.kv_cache_groups),
+            finished_req_ids=self.finished_req_ids,
+            free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
+            structured_output_request_ids={},
+            grammar_bitmask=None,
+            pending_long_request_sync_id=None,
+        )
 
     def _update_after_schedule(
         self,
@@ -912,6 +1067,15 @@ class Scheduler(SchedulerInterface):
             # Return stats to only one of the front-ends.
             next(iter(engine_core_outputs.values())).scheduler_stats = (
                 self.make_stats(spec_decoding_stats))
+            
+        # Shouwei's note: If the long request is finished, reset the state
+        if self.pending_long_request_sync_id in self.finished_req_ids:
+            self.pending_long_request_sync_id = None
+            self.long_request_execution_mode = False
+            self.sync_already = False
+            self.long_request_finished_sync = True
+            #TODO: assuming using one client maybe not enough
+            engine_core_outputs[0].switch_dtp_group_state = True
 
         return engine_core_outputs
 

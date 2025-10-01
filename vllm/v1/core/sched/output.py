@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -155,3 +155,9 @@ class SchedulerOutput:
 
     # KV Cache Connector metadata.
     kv_connector_metadata: Optional[KVConnectorMetadata] = None
+    
+    # Long request synchronization ID that is being scheduled
+    pending_long_request_sync_id: Optional[str] = None
+    
+    # Whether to switch the DTP group state
+    switch_dtp_group_state: bool = False

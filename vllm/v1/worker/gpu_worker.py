@@ -18,7 +18,7 @@ from vllm.distributed import (ensure_model_parallel_initialized,
 from vllm.distributed.kv_transfer import (ensure_kv_transfer_initialized,
                                           get_kv_transfer_group,
                                           has_kv_transfer_group)
-from vllm.distributed.parallel_state import get_pp_group, get_tp_group
+from vllm.distributed.parallel_state import get_pp_group, get_tp_group, set_dtp_group_state
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
@@ -397,6 +397,14 @@ class Worker(WorkerBase):
     ) -> None:
         self.model_runner.save_tensorized_model(
             tensorizer_config=tensorizer_config, )
+    
+    def worker_set_dtp_group_state(self, state: bool) -> None:
+        """Set the per-process DTP group state on this worker process.
+
+        This is invoked via collective_rpc across all workers so each process
+        updates its own local group state consistently.
+        """
+        set_dtp_group_state(state)
 
 
 def init_worker_distributed_environment(
