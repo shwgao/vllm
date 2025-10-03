@@ -121,10 +121,10 @@ class Scheduler(SchedulerInterface):
         
         # Long request synchronization state
         self.pending_long_request_sync_id: Optional[str] = None
+        self.long_request_engines: Optional[list[int]] = None
         # waiting for the coordinator to start the execution mode
         self.long_request_execution_mode: bool = False
         self.sync_already: bool = False
-        self.long_request_finished_sync: bool = False
 
         # KV Connector: requests in process of async KV loading or recving
         self.finished_recving_kv_req_ids: set[str] = set()
@@ -378,6 +378,7 @@ class Scheduler(SchedulerInterface):
                     skipped_waiting_requests.prepend_request(request)
                     if self.pending_long_request_sync_id is None:
                         self.pending_long_request_sync_id = request.long_request_sync_id
+                        self.long_request_engines = request.long_request_engines
                     continue
 
                 # Check that adding the request still respects the max_loras
@@ -607,7 +608,7 @@ class Scheduler(SchedulerInterface):
     
     def _schedule_long_request_exclusive(self) -> SchedulerOutput:
         """Schedule only the long request, preempting all other running requests."""
-        logger.debug(f"Scheduling long request {self.pending_long_request_sync_id} exclusively")
+        logger.info(f"Scheduling long request {self.pending_long_request_sync_id} exclusively")
         
         # Check if the long request is already in the running queue
         long_request = None
@@ -625,8 +626,14 @@ class Scheduler(SchedulerInterface):
                     break
             
             if long_request is None:
+                # log
                 logger.error(f"Long request {self.pending_long_request_sync_id} not found")
+            
+                with open("/ccsopen/home/shouwei/projects/vllm/waiting_queue.txt", "a") as f:
+                    for req in self.waiting:
+                            f.write(str(req.request_id) + "\n")
                 return self._create_empty_scheduler_output()
+
             
             # Preempt all running requests if any
             if self.running:
@@ -650,9 +657,7 @@ class Scheduler(SchedulerInterface):
             
             # Shouwei's note: set the DTP group state to true
             switch_dtp_group_state = True
-            
-            logger.info(f"Long request {self.pending_long_request_sync_id} is now running")
-        
+                    
         # Allocate resources for long request
         num_new_tokens = long_request.num_tokens - long_request.num_computed_tokens
         num_new_tokens = min(num_new_tokens, self.max_num_scheduled_tokens)
@@ -664,6 +669,7 @@ class Scheduler(SchedulerInterface):
             # Reset mode and return empty schedule
             self.long_request_execution_mode = False
             self.pending_long_request_sync_id = None
+            self.long_request_engines = None
             return self._create_empty_scheduler_output()
         
         # Create scheduler output based on whether request is already running
@@ -1073,7 +1079,6 @@ class Scheduler(SchedulerInterface):
             self.pending_long_request_sync_id = None
             self.long_request_execution_mode = False
             self.sync_already = False
-            self.long_request_finished_sync = True
             #TODO: assuming using one client maybe not enough
             engine_core_outputs[0].switch_dtp_group_state = True
 

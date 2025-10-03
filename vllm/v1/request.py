@@ -38,6 +38,7 @@ class Request:
         priority: int = 0,
         is_long_request: bool = False,
         long_request_sync_id: Optional[str] = None,
+        long_request_engines: Optional[list[int]] = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -86,6 +87,7 @@ class Request:
         # Long request synchronization
         self.is_long_request: bool = is_long_request
         self.long_request_sync_id: Optional[str] = long_request_sync_id
+        self.long_request_engines: Optional[list[int]] = long_request_engines
 
         # Multi-modal related
         self.mm_positions = multi_modal_placeholders or []
@@ -139,6 +141,7 @@ class Request:
             priority=request.priority,
             is_long_request=request.is_long_request,
             long_request_sync_id=request.request_id,
+            long_request_engines=request.long_request_engines,
         )
 
     def append_output_token_ids(

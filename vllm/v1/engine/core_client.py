@@ -966,11 +966,13 @@ class DPAsyncMPClient(AsyncMPClient):
         request.client_index = self.client_index
         
         # shouwei added. TODO: add interface for the threshold.
-        long_request_threshold = 819300
+        long_request_threshold = 81920
         request.is_long_request = len(request.prompt_token_ids) > long_request_threshold
-        request.long_request_engines = []
+        if request.is_long_request:
+            request.long_request_engine_num = 2
 
         chosen_engines = self.get_core_engine_for_request(request)
+        logger.info(f"chosen_engines: {chosen_engines} for request {request.request_id}")
         
         # Store the selected engines in the request for potential use
         engine_indices = []
@@ -1012,6 +1014,8 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
 
         # To route aborts to the correct engine.
         self.reqs_in_flight: dict[str, EngineIdentity] = {}
+        
+        self.last_selected_engine_index: int = 0
 
         super().__init__(vllm_config, executor_class, log_stats,
                          client_addresses, client_index)
@@ -1065,7 +1069,7 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
             # Create a list of (engine_index, waiting_count, running_count) tuples
             engine_loads = []
             for i in range(num_engines):
-                idx = (self.client_index + i) % num_engines
+                idx = (self.client_index + i + self.last_selected_engine_index + 1) % num_engines
                 counts = self.lb_engines[idx]
                 # Store waiting and running counts separately for comparison
                 waiting_count = counts[0]
@@ -1077,6 +1081,8 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
             
             # Select the least loaded engines
             selected_indices = [eng_load[0] for eng_load in engine_loads[:num_engines_to_select]]
+            
+            self.last_selected_engine_index = selected_indices[-1]
             
             # Convert to engine identities
             engines = [self.core_engines[idx] for idx in selected_indices]

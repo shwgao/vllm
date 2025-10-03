@@ -238,34 +238,46 @@ class EngineCore:
             return {}, False
         scheduler_output = self.scheduler.schedule()
         
-        if scheduler_output.switch_dtp_group_state:
-            self.collective_rpc("worker_set_dtp_group_state", args=(True,))
-        
         # Handle long request synchronization
         # Only send ready signal when we're actually executing the long request
         if (scheduler_output.pending_long_request_sync_id and
             not self.scheduler.sync_already):
             # Get the single sync_id from the set
             sync_id = scheduler_output.pending_long_request_sync_id
-            logger.debug(f"Engine {self.engine_index} executing long request {sync_id}")
+            logger.info(f"Engine {self.engine_index} sending ready signal for "
+                         f"long request {sync_id} at wave index "
+                         f"{self.current_wave}")
             self.output_queue.put_nowait(
                 (-1, EngineCoreOutputs(engine_index=self.engine_index, 
+                                       long_request_engines=self.scheduler.long_request_engines,
                                        long_request_ready=sync_id)))
             self.scheduler.sync_already = True
         
+        if scheduler_output.switch_dtp_group_state:
+            logger.info(f"Engine {self.engine_index} switching DTP group state to True")
+            self.collective_rpc("worker_set_dtp_group_state", args=(True,))
+        
+        logger.info(f"Engine {self.engine_index} start to execute model with new request "
+                    f"{len(scheduler_output.scheduled_new_reqs)} and cached requests: "
+                    f"{len(scheduler_output.scheduled_cached_reqs.req_ids)}")
         model_output = self.execute_model(scheduler_output)
+        logger.info(f"Engine {self.engine_index} finished executing model with new request "
+                    f"{len(scheduler_output.scheduled_new_reqs)} and cached requests: "
+                    f"{len(scheduler_output.scheduled_cached_reqs.req_ids)}")
+        
         # TODO: we can update the _DTP status within this function
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output)  # type: ignore
         
         if engine_core_outputs:
             if engine_core_outputs[0].switch_dtp_group_state:
+                logger.info(f"Engine {self.engine_index} switching DTP group state to False"
+                            f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
-        
-        if self.scheduler.long_request_finished_sync:
-            self.output_queue.put_nowait((-1, EngineCoreOutputs(
-                long_request_complete=scheduler_output.pending_long_request_sync_id)))
-            self.scheduler.long_request_finished_sync = False
+
+                self.output_queue.put_nowait((-1, EngineCoreOutputs(
+                    long_request_complete=next(iter(
+                        engine_core_outputs[0].finished_requests)))))
 
         return (engine_core_outputs,
                 scheduler_output.total_num_scheduled_tokens > 0)
@@ -774,6 +786,12 @@ class EngineCoreProc(EngineCore):
                         request_type
                         == EngineCoreRequestType.ADD) else generic_decoder
                     request = decoder.decode(data_frames)
+                    
+                    # debug, if it's EngineCoreRequestType.ADD, log the request's id
+                    # into a file
+                    if request_type == EngineCoreRequestType.ADD:
+                        with open("/ccsopen/home/shouwei/projects/vllm/add_request.txt", "a") as f:
+                            f.write(str(request.request_id) + "\n")
 
                     # Push to input queue for core busy loop.
                     self.input_queue.put_nowait((request_type, request))
@@ -947,6 +965,8 @@ class DPEngineCoreProc(EngineCoreProc):
             logger.debug(f"Engine {self.engine_index} starting long request {sync_id}")
             if self.engine_index in eng_indices:
                 self.scheduler.long_request_execution_mode = True
+                self.scheduler.pending_long_request_sync_id = sync_id
+                self.scheduler.long_request_engines = eng_indices
         else:
             super()._handle_client_request(request_type, request)
 

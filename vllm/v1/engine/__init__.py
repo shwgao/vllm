@@ -76,7 +76,7 @@ class EngineCoreRequest(
     
     # Used for DTP case to indicate if the request a long request that needs
     # more than one engine to finish
-    long_request_engine_num: int = 2
+    long_request_engine_num: int = 1
     long_request_engines: list[int] = []
 
 
@@ -173,6 +173,7 @@ class EngineCoreOutputs(
     # Long request synchronization signals
     long_request_ready: Optional[str] = None  # sync_id when ready to start(only one long request)
     long_request_complete: Optional[str] = None  # sync_id when completed
+    long_request_engines: Optional[list[int]] = None  # engines that will start the long request
     
     # Whether to switch the DTP group state
     switch_dtp_group_state: bool = False
