@@ -36,7 +36,7 @@ from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
 
-from vllm.distributed.parallel_state import set_dtp_group_state
+from vllm.distributed.parallel_state import set_dtp_group_state, set_dtp_group_request, get_dtp_group_request
 
 logger = init_logger(__name__)
 
@@ -119,12 +119,12 @@ class Scheduler(SchedulerInterface):
         # This is flushed at the end of each scheduling step.
         self.finished_req_ids: set[str] = set()
         
-        # Long request synchronization state
+        # new long request coming
         self.pending_long_request_sync_id: Optional[str] = None
         self.long_request_engines: Optional[list[int]] = None
         # waiting for the coordinator to start the execution mode
         self.long_request_execution_mode: bool = False
-        self.sync_already: bool = False
+        self.switch_dtp_group_state_already: bool = False
 
         # KV Connector: requests in process of async KV loading or recving
         self.finished_recving_kv_req_ids: set[str] = set()
@@ -377,7 +377,7 @@ class Scheduler(SchedulerInterface):
                     self.waiting.pop_request()
                     skipped_waiting_requests.prepend_request(request)
                     if self.pending_long_request_sync_id is None:
-                        self.pending_long_request_sync_id = request.long_request_sync_id
+                        self.pending_long_request_sync_id = request.request_id
                         self.long_request_engines = request.long_request_engines
                     continue
 
@@ -608,26 +608,30 @@ class Scheduler(SchedulerInterface):
     
     def _schedule_long_request_exclusive(self) -> SchedulerOutput:
         """Schedule only the long request, preempting all other running requests."""
-        logger.info(f"Scheduling long request {self.pending_long_request_sync_id} exclusively")
         
+        long_request_id = self.pending_long_request_sync_id
+        # logger.info(f"Scheduling long request {long_request_id} exclusively")
         # Check if the long request is already in the running queue
         long_request = None
         is_already_running = False
         switch_dtp_group_state = False
+        if not self.switch_dtp_group_state_already:
+            switch_dtp_group_state = True
+            self.switch_dtp_group_state_already = True
         
-        if self.running and self.running[0].long_request_sync_id == self.pending_long_request_sync_id:
+        if self.running and self.running[0].request_id == long_request_id:
             long_request = self.running[0]
             is_already_running = True
         else:
             # Find the long request in waiting queue
             for req in self.waiting:
-                if req.long_request_sync_id == self.pending_long_request_sync_id:
+                if req.request_id == long_request_id:
                     long_request = req
                     break
             
             if long_request is None:
                 # log
-                logger.error(f"Long request {self.pending_long_request_sync_id} not found")
+                logger.error(f"Long request {long_request_id} not found")
             
                 with open("/ccsopen/home/shouwei/projects/vllm/waiting_queue.txt", "a") as f:
                     for req in self.waiting:
@@ -654,9 +658,6 @@ class Scheduler(SchedulerInterface):
             self.waiting.remove_request(long_request)
             self.running.append(long_request)
             long_request.status = RequestStatus.RUNNING
-            
-            # Shouwei's note: set the DTP group state to true
-            switch_dtp_group_state = True
                     
         # Allocate resources for long request
         num_new_tokens = long_request.num_tokens - long_request.num_computed_tokens
@@ -1077,8 +1078,9 @@ class Scheduler(SchedulerInterface):
         # Shouwei's note: If the long request is finished, reset the state
         if self.pending_long_request_sync_id in self.finished_req_ids:
             self.pending_long_request_sync_id = None
+            self.switch_dtp_group_state_already = False
             self.long_request_execution_mode = False
-            self.sync_already = False
+            self.long_request_engines = None
             #TODO: assuming using one client maybe not enough
             engine_core_outputs[0].switch_dtp_group_state = True
 

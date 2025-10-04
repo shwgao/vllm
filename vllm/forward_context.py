@@ -45,20 +45,9 @@ class DPMetadata:
         num_tokens_tensor = torch.tensor(num_tokens_across_dp,
                                          device="cpu",
                                          dtype=torch.int32)
-        from vllm.distributed.parallel_state import get_dp_group, get_dtp_group_state, get_dtp_group
-        if get_dtp_group_state():
-            logger.info(f"engine {dp_rank} waiting dtp group to all reduce with num_tokens {num_tokens},"
-                        f"dtp_group{get_dtp_group().ranks}, log_step {DPMetadata.debug_log_step}")
-            dist.all_reduce(num_tokens_tensor, group=get_dtp_group().cpu_group)
-            logger.info(f"engine {dp_rank} finished all reduce with num_tokens {num_tokens},"
-                        f"dtp_group{get_dtp_group().ranks}, log_step {DPMetadata.debug_log_step}")
-        else:
-            logger.info(f"engine {dp_rank} waiting dp group to all reduce with num_tokens {num_tokens},"
-                        f"dp_group{get_dp_group().ranks}, log_step {DPMetadata.debug_log_step}")
-            dist.all_reduce(num_tokens_tensor, group=get_dp_group().cpu_group)
-            logger.info(f"engine {dp_rank} finished all reduce with num_tokens {num_tokens},"
-                        f"dp_group{get_dp_group().ranks}, log_step {DPMetadata.debug_log_step}")
-        DPMetadata.debug_log_step += 1
+        from vllm.distributed.parallel_state import get_dp_group
+        dist.all_reduce(num_tokens_tensor, group=get_dp_group().cpu_group)
+
         return num_tokens_tensor
 
     @staticmethod
@@ -66,7 +55,7 @@ class DPMetadata:
             parallel_config: ParallelConfig,
             attn_metadata: Any,
             num_tokens: int,
-            num_tokens_across_dp: Optional[torch.Tensor] = None
+            num_tokens_across_dp: Optional[torch.Tensor] = None,
     ) -> "DPMetadata":
 
         assert parallel_config.data_parallel_size > 1

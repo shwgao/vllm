@@ -2025,6 +2025,17 @@ class ParallelConfig:
         aggregated_has_unfinished = bool(tensor.item())
         return aggregated_has_unfinished
 
+    @staticmethod
+    def sync_long_request_across_dp_ranks(dp_group: "ProcessGroup",
+                                          sync_long_request: str,
+                                          eng_indices: list[int]):
+        gathered_objects = {i: None for i in range(dp_group.size())}
+        torch.distributed.all_gather_object(gathered_objects, 
+                                            {dp_group.rank():(sync_long_request, 
+                                                              eng_indices)}, 
+                                            group=dp_group)
+        return gathered_objects
+
     def compute_hash(self):
         """
         Provide a hash that uniquely identifies all the configs

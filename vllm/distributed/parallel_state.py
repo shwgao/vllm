@@ -1139,6 +1139,16 @@ def get_dynamic_tensor_model_parallel_rank() -> int:
 
 # _DTP: Optional[GroupCoordinator] = None
 _DTP_STATE = False  # decide whether to use the DTP group
+_DTP_REQUEST = None # request id of the long request
+
+
+def get_dtp_group_request() -> Optional[str]:
+    return _DTP_REQUEST
+
+
+def set_dtp_group_request(request: str) -> None:
+    global _DTP_REQUEST
+    _DTP_REQUEST = request
 
 
 def get_dtp_group_state() -> bool:
