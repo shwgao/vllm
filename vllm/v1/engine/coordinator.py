@@ -266,13 +266,6 @@ class CoordinatorProc:
                         self.stats_changed = True
                         self._send_start_wave(publish_back, wave, eng_index)
                     
-                    # Handle long request synchronization
-                    if (sync_id := outputs.long_request_ready) is not None:
-                        eng_indices = outputs.long_request_engines
-                        self._handle_long_request_ready(sync_id, eng_index, eng_indices, publish_back)
-                    elif (sync_id := outputs.long_request_complete) is not None:
-                        self._handle_long_request_complete(sync_id, eng_index, publish_back)
-
     @staticmethod
     def _send_start_wave(socket: zmq.Socket, wave: int,
                          exclude_engine_index: Optional[int]):
@@ -289,61 +282,3 @@ class CoordinatorProc:
         """Return list of [waiting, running] count lists for each engine."""
         return [e.request_counts for e in self.engines]
     
-    def _handle_long_request_ready(self, sync_id: str, eng_index: int, 
-                                   eng_indices: list[int], publish_back: zmq.Socket) -> None:
-        """Handle when an engine is ready to start a long request."""
-        logger.info(f"Engine {eng_index} ready for long request {sync_id}")
-        
-        if self.active_long_request_sync_id is None or \
-            self.active_long_request_sync_id == sync_id:
-            self._send_start_long_request(publish_back, eng_indices, sync_id)
-        
-        return
-        
-        if self.active_long_request_sync_id is None:
-            # Start new long request synchronization
-            self.active_long_request_sync_id = sync_id
-            self.engines_ready_for_long_request = {eng_index}
-            self.long_request_engines = {eng_index}
-        elif self.active_long_request_sync_id == sync_id:
-            # Add engine to ready set
-            self.engines_ready_for_long_request.add(eng_index)
-            self.long_request_engines.add(eng_index)
-        else:
-            logger.error(f"Engine {eng_index} received long request ready "
-                         f"message for sync id {sync_id}, but current active "
-                         f"sync id is {self.active_long_request_sync_id}")
-            # send a sync message to all engines
-            self._send_start_long_request(publish_back, eng_indices, sync_id)
-        
-        # Check if all engines are ready
-        if len(self.engines_ready_for_long_request) == len(self.engines):
-            logger.info(f"All engines ready for long request {sync_id}, starting execution")
-            # Broadcast to all engines to start long request execution
-            eng_indices = list(self.long_request_engines)
-            self._send_start_long_request(publish_back, eng_indices, sync_id)
-    
-    def _handle_long_request_complete(self, sync_id: str, eng_index: int,
-                                      publish_back: zmq.Socket) -> None:
-        """Handle when an engine completes a long request."""
-        logger.info(f"Engine {eng_index} completed long request {sync_id}")
-        
-        if self.active_long_request_sync_id is None:
-            return
-        
-        assert self.active_long_request_sync_id == sync_id
-        self.long_request_engines.discard(eng_index)
-        
-        # If all engines completed, reset state
-        if len(self.long_request_engines) == 0:
-            logger.debug(f"All engines completed long request {sync_id}")
-            self.active_long_request_sync_id = None
-            self.engines_ready_for_long_request.clear()
-            self.long_request_engines.clear()
-    
-    @staticmethod
-    def _send_start_long_request(socket: zmq.Socket, eng_indices: list[int], sync_id: str) -> None:
-        """Broadcast START_LONG_REQUEST message to all engines."""
-        sync_id_encoded = msgspec.msgpack.encode((eng_indices, sync_id))
-        socket.send_multipart(
-            (EngineCoreRequestType.START_LONG_REQUEST.value, sync_id_encoded))

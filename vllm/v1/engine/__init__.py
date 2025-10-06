@@ -170,11 +170,6 @@ class EngineCoreOutputs(
     # "old" wave, so the next wave needs to be started in other engines.
     start_wave: Optional[int] = None
     
-    # Long request synchronization signals
-    long_request_ready: Optional[str] = None  # sync_id when ready to start(only one long request)
-    long_request_complete: Optional[str] = None  # sync_id when completed
-    long_request_engines: Optional[list[int]] = None  # engines that will start the long request
-    
     # Whether to switch the DTP group state
     switch_dtp_group_state: bool = False
 
@@ -192,8 +187,5 @@ class EngineCoreRequestType(enum.Enum):
     ABORT = b'\x01'
     START_DP_WAVE = b'\x02'
     UTILITY = b'\x03'
-    # Long request synchronization messages
-    START_LONG_REQUEST = b'\x05'
-    LONG_REQUEST_COMPLETE = b'\x06'
     # Sentinel used within EngineCoreProc.
     EXECUTOR_FAILED = b'\x04'

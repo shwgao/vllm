@@ -633,9 +633,6 @@ class Scheduler(SchedulerInterface):
                 # log
                 logger.error(f"Long request {long_request_id} not found")
             
-                with open("/ccsopen/home/shouwei/projects/vllm/waiting_queue.txt", "a") as f:
-                    for req in self.waiting:
-                            f.write(str(req.request_id) + "\n")
                 return self._create_empty_scheduler_output()
 
             

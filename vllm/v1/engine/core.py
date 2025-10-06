@@ -245,16 +245,10 @@ class EngineCore:
         scheduler_output = self.scheduler.schedule()
         
         if scheduler_output.switch_dtp_group_state:
-            logger.info(f"Engine {self.engine_index} switching DTP group state to True")
+            # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
             self.collective_rpc("worker_set_dtp_group_state", args=(True,))
         
-        # logger.info(f"Engine {self.engine_index} start to execute model with new request "
-        #             f"{len(scheduler_output.scheduled_new_reqs)} and cached requests: "
-        #             f"{len(scheduler_output.scheduled_cached_reqs.req_ids)}")
         model_output = self.execute_model(scheduler_output)
-        # logger.info(f"Engine {self.engine_index} finished executing model with new request "
-        #             f"{len(scheduler_output.scheduled_new_reqs)} and cached requests: "
-        #             f"{len(scheduler_output.scheduled_cached_reqs.req_ids)}")
         
         # TODO: we can update the _DTP status within this function
         engine_core_outputs = self.scheduler.update_from_output(
@@ -262,8 +256,8 @@ class EngineCore:
         
         if engine_core_outputs:
             if engine_core_outputs[0].switch_dtp_group_state:
-                logger.info(f"Engine {self.engine_index} switching DTP group state to False"
-                            f"at wave index {self.current_wave}")
+                # logger.info(f"Engine {self.engine_index} switching DTP group state to False"
+                #             f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
 
         return (engine_core_outputs,
@@ -773,12 +767,6 @@ class EngineCoreProc(EngineCore):
                         request_type
                         == EngineCoreRequestType.ADD) else generic_decoder
                     request = decoder.decode(data_frames)
-                    
-                    # debug, if it's EngineCoreRequestType.ADD, log the request's id
-                    # into a file
-                    if request_type == EngineCoreRequestType.ADD:
-                        with open("/ccsopen/home/shouwei/projects/vllm/add_request.txt", "a") as f:
-                            f.write(str(request.request_id) + "\n")
 
                     # Push to input queue for core busy loop.
                     self.input_queue.put_nowait((request_type, request))
@@ -947,13 +935,6 @@ class DPEngineCoreProc(EngineCoreProc):
                     logger.debug("EngineCore starting idle loop for wave %d.",
                                  new_wave)
                     self.engines_running = True
-        elif request_type == EngineCoreRequestType.START_LONG_REQUEST:
-            eng_indices, sync_id = request
-            logger.debug(f"Engine {self.engine_index} starting long request {sync_id}")
-            if self.engine_index in eng_indices:
-                self.scheduler.long_request_execution_mode = True
-                self.scheduler.pending_long_request_sync_id = sync_id
-                self.scheduler.long_request_engines = eng_indices
         else:
             super()._handle_client_request(request_type, request)
 
@@ -980,11 +961,7 @@ class DPEngineCoreProc(EngineCoreProc):
             # 2) Step the engine core.
             executed = self._process_engine_step()
             self._maybe_publish_request_counts()
-            
-            # 2.5) Check if long request will be executed next step and
-            if executed:
-                self._syn_long_request()
-                    
+       
             local_unfinished_reqs = self.scheduler.has_unfinished_requests()
             if not executed:
                 if not local_unfinished_reqs and not self.engines_running:
@@ -994,6 +971,9 @@ class DPEngineCoreProc(EngineCoreProc):
                 # We are in a running state and so must execute a dummy pass
                 # if the model didn't execute any ready requests.
                 self.execute_dummy_batch()
+            
+            # 2.5) Check if long request will be executed next step and
+            self._syn_long_request()
 
             # 3) All-reduce operation to determine global unfinished reqs.
             self.engines_running = self._has_global_unfinished_reqs(
@@ -1045,14 +1025,18 @@ class DPEngineCoreProc(EngineCoreProc):
         long_request_synced = self._sync_long_request_across_dp_ranks(
             self.scheduler.pending_long_request_sync_id,
             self.scheduler.long_request_engines)
+        # logger.info(f"long_request_synced: {long_request_synced}")
         # if one of the DP ranks has the long request synced
         if long_request_synced:
             # Sort the long_request_synced dictionary based on rank
-            sorted_long_request_synced = sorted(long_request_synced.items())
+            # long_request_synced.sort(key=min)
             busy_engines = {}
-            for rank, (sync_long_request, eng_indices) in sorted_long_request_synced:
-                # check if the needed engines are busy
-                if rank in busy_engines:
+            for rank, (sync_long_request, eng_indices) in sorted(
+                (kv for d in long_request_synced for kv in d.items()),
+                key=lambda x: x[0]
+            ):
+                # check if the needed engines are busy or the eng_indices is empty
+                if rank in busy_engines or not eng_indices:
                     continue
                 else:
                     for engine_index in eng_indices:

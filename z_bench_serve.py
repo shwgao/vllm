@@ -322,27 +322,27 @@ async def benchmark(
         input_requests[0].multi_modal_data,
     )
 
-    # assert test_mm_content is None or isinstance(test_mm_content, dict)
-    # test_input = RequestFuncInput(
-    #     model=model_id,
-    #     model_name=model_name,
-    #     prompt=test_prompt,
-    #     api_url=api_url,
-    #     prompt_len=test_prompt_len,
-    #     output_len=test_output_len,
-    #     logprobs=logprobs,
-    #     multi_modal_content=test_mm_content,
-    #     ignore_eos=ignore_eos,
-    #     extra_body=extra_body,
-    # )
+    assert test_mm_content is None or isinstance(test_mm_content, dict)
+    test_input = RequestFuncInput(
+        model=model_id,
+        model_name=model_name,
+        prompt=test_prompt,
+        api_url=api_url,
+        prompt_len=test_prompt_len,
+        output_len=test_output_len,
+        logprobs=logprobs,
+        multi_modal_content=test_mm_content,
+        ignore_eos=ignore_eos,
+        extra_body=extra_body,
+    )
 
-    # test_output = await request_func(request_func_input=test_input)
-    # if not test_output.success:
-    #     raise ValueError(
-    #         "Initial test run failed - Please make sure benchmark arguments "
-    #         f"are correctly specified. Error: {test_output.error}")
-    # else:
-    #     print("Initial test run completed. Starting main benchmark run...")
+    test_output = await request_func(request_func_input=test_input)
+    if not test_output.success:
+        raise ValueError(
+            "Initial test run failed - Please make sure benchmark arguments "
+            f"are correctly specified. Error: {test_output.error}")
+    else:
+        print("Initial test run completed. Starting main benchmark run...")
 
     if lora_modules:
         # For each input request, choose a LoRA module at random.
@@ -1071,8 +1071,8 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
-    args.random_input_len = 81920
+    args.random_input_len = 8192
     args.num_prompts = 20
-    args.random_output_len = 2
+    args.random_output_len = 20
     args.random_range_ratio = 0.5
     main(args)
