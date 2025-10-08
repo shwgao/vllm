@@ -341,7 +341,7 @@ async def benchmark(
     # print test output text
     print(test_output.generated_text)
     
-    return
+    # return
     
     if not test_output.success:
         raise ValueError(
@@ -1077,13 +1077,14 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
-    # args.random_input_len = 819
-    # args.num_prompts = 20
-    # args.random_output_len = 20
-    # args.random_range_ratio = 0.5
+    args.random_input_len = 8192
+    args.num_prompts = 100
+    args.random_output_len = 2
+    args.random_range_ratio = 0.5
+    args.request_rate = 10
     
-    args.dataset_name = "sonnet"
-    args.num_prompts = 1
-    args.dataset_path = "./benchmarks/sonnet.txt"
+    # args.dataset_name = "sonnet"
+    # args.num_prompts = 1
+    # args.dataset_path = "./benchmarks/sonnet.txt"
     
     main(args)

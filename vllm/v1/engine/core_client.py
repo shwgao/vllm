@@ -966,7 +966,7 @@ class DPAsyncMPClient(AsyncMPClient):
         request.client_index = self.client_index
         
         # shouwei added. TODO: add interface for the threshold.
-        long_request_threshold = 1
+        long_request_threshold = 50000
         request.is_long_request = len(request.prompt_token_ids) > long_request_threshold
         if request.is_long_request:
             request.long_request_engine_num = 2
