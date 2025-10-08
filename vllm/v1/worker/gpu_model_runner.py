@@ -1306,7 +1306,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             else:
                 num_input_tokens = num_scheduled_tokens
 
-        # Padding for DP
+        # Padding for DP  # TODO(shouwei): Check if this should be modified!
         num_pad, num_tokens_across_dp = self.get_dp_padding(num_input_tokens)
         num_input_tokens += num_pad
 

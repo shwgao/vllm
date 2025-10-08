@@ -337,6 +337,12 @@ async def benchmark(
     )
 
     test_output = await request_func(request_func_input=test_input)
+    
+    # print test output text
+    print(test_output.generated_text)
+    
+    return
+    
     if not test_output.success:
         raise ValueError(
             "Initial test run failed - Please make sure benchmark arguments "
@@ -1071,8 +1077,13 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
-    args.random_input_len = 8192
-    args.num_prompts = 20
-    args.random_output_len = 20
-    args.random_range_ratio = 0.5
+    # args.random_input_len = 819
+    # args.num_prompts = 20
+    # args.random_output_len = 20
+    # args.random_range_ratio = 0.5
+    
+    args.dataset_name = "sonnet"
+    args.num_prompts = 1
+    args.dataset_path = "./benchmarks/sonnet.txt"
+    
     main(args)

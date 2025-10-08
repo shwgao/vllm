@@ -1040,13 +1040,12 @@ class DPEngineCoreProc(EngineCoreProc):
                     continue
                 else:
                     for engine_index in eng_indices:
-                        busy_engines[engine_index] = sync_long_request
+                        busy_engines[engine_index] = (sync_long_request, eng_indices)
             
             if self.dp_rank in busy_engines:
                 self.scheduler.long_request_execution_mode = True
-                self.scheduler.pending_long_request_sync_id = busy_engines[self.dp_rank]
-                self.scheduler.long_request_engines = busy_engines[self.dp_rank]
-        
+                self.scheduler.pending_long_request_sync_id = busy_engines[self.dp_rank][0]
+                self.scheduler.long_request_engines = busy_engines[self.dp_rank][1]
         
     def _sync_long_request_across_dp_ranks(self, 
                                            sync_long_request: str, 
