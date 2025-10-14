@@ -36,7 +36,7 @@ from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
 
-from vllm.distributed.parallel_state import set_dtp_group_state, set_dtp_group_request, get_dtp_group_request
+from vllm.distributed.parallel_state import set_dtp_group_state, set_dtp_group_request, get_dtp_group_request, get_dtp_group_world_size
 
 logger = init_logger(__name__)
 
@@ -606,6 +606,17 @@ class Scheduler(SchedulerInterface):
         self._update_after_schedule(scheduler_output)
         return scheduler_output
     
+    def kv_cache_config_set(self,):
+        """Set kv cache config, I reset the config back at engine core level"""
+        dtp_size = get_dtp_group_world_size()
+        self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
+        self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
+        # self.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
+        # self.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
+        self.block_size *= dtp_size
+        for i, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
+            manager.block_size *= dtp_size
+    
     def _schedule_long_request_exclusive(self) -> SchedulerOutput:
         """Schedule only the long request, preempting all other running requests."""
         
@@ -655,6 +666,9 @@ class Scheduler(SchedulerInterface):
             self.waiting.remove_request(long_request)
             self.running.append(long_request)
             long_request.status = RequestStatus.RUNNING
+            
+            # Set kv cache config
+            self.kv_cache_config_set()
                     
         # Allocate resources for long request
         num_new_tokens = long_request.num_tokens - long_request.num_computed_tokens

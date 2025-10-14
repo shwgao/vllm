@@ -340,6 +340,10 @@ class LlamaDecoderLayer(nn.Module):
         
         original_q_size = self.self_attn.q_size
         original_kv_size = self.self_attn.kv_size
+        
+        original_block_size = self.self_attn.attn.kv_cache[0].shape[2]
+        original_kv_head_num = self.self_attn.attn.kv_cache[0].shape[3]
+        
         try:
             self.self_attn.o_proj.tp_size = self.dtp_size
             self.mlp.down_proj.tp_size = self.dtp_size
@@ -349,6 +353,12 @@ class LlamaDecoderLayer(nn.Module):
             
             self.self_attn.q_size = self.self_attn.dtp_q_size
             self.self_attn.kv_size = self.self_attn.dtp_kv_size
+            
+            self.self_attn.attn.kv_cache[0] = self.self_attn.attn.kv_cache[0].view(self.self_attn.attn.kv_cache[0].shape[0], 
+                                              self.self_attn.attn.kv_cache[0].shape[1], 
+                                              original_block_size * self.dtp_size, 
+                                              original_kv_head_num // self.dtp_size, 
+                                              self.self_attn.attn.kv_cache[0].shape[4])
             yield
         finally:
             self.self_attn.o_proj.tp_size = original_o_proj_tp
@@ -359,6 +369,11 @@ class LlamaDecoderLayer(nn.Module):
             
             self.self_attn.q_size = original_q_size
             self.self_attn.kv_size = original_kv_size
+            
+            self.self_attn.attn.kv_cache[0] = self.self_attn.attn.kv_cache[0].view(self.self_attn.attn.kv_cache[0].shape[0], 
+                                              self.self_attn.attn.kv_cache[0].shape[1], 
+                                              original_block_size, original_kv_head_num, 
+                                              self.self_attn.attn.kv_cache[0].shape[4])
 
     def forward(
         self,

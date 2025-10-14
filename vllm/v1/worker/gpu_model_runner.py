@@ -26,7 +26,7 @@ from vllm.distributed.kv_transfer import (get_kv_transfer_group,
 from vllm.distributed.kv_transfer.kv_connector.v1 import KVConnectorBase_V1
 from vllm.distributed.parallel_state import (
     get_pp_group, get_tp_group, graph_capture, is_global_first_rank,
-    prepare_communication_buffer_for_model)
+    prepare_communication_buffer_for_model, get_dtp_group_state, get_dtp_group_world_size)
 from vllm.forward_context import (DPMetadata, get_forward_context,
                                   set_forward_context)
 from vllm.logger import init_logger
@@ -640,7 +640,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Calculate the slot mapping for each KV cache group.
         for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
-            block_size = kv_cache_group_spec.kv_cache_spec.block_size
+            block_size = kv_cache_group_spec.kv_cache_spec.block_size # TODO: shouwei should modidfy this
             block_table: BlockTable = self.input_batch.block_table[
                 kv_cache_group_id]
             # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
@@ -1268,6 +1268,37 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             prompt_logprobs_dict={},
             pooler_output=pooler_output,
         )
+    
+    @contextmanager
+    def dtp_context(self):
+        if not get_dtp_group_state():
+            yield
+            return
+        
+        # if we are running in DTP group, we need to change the block size
+        # original:[2, block_num, block_size, kv_head_num, kv_head_size]
+        # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
+        dtp_size = get_dtp_group_world_size()
+        original_block_size = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
+        original_num_kv_heads = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
+        for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                self.kv_cache_config.kv_cache_groups):
+            # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size * dtp_size
+            # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads // dtp_size
+            builder = self.attn_metadata_builders[kv_cache_group_id]
+            builder.block_size = original_block_size
+            builder.num_heads_kv = original_num_kv_heads
+        
+        try:
+            yield
+        finally:
+            for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                self.kv_cache_config.kv_cache_groups):
+                # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size
+                # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads
+                builder = self.attn_metadata_builders[kv_cache_group_id]
+                builder.block_size = original_block_size // dtp_size
+                builder.num_heads_kv = original_num_kv_heads * dtp_size
 
     @torch.inference_mode()
     def execute_model(
@@ -1283,11 +1314,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             # Return empty ModelRunnerOutput if there's no work to do.
             return EMPTY_MODEL_RUNNER_OUTPUT
-
-        # Prepare the decoder inputs.
-        (attn_metadata, attention_cuda_graphs, logits_indices,
-         spec_decode_metadata,
-         num_scheduled_tokens_np) = (self._prepare_inputs(scheduler_output))
+        
+        with self.dtp_context():
+            # Prepare the decoder inputs.
+            (attn_metadata, attention_cuda_graphs, logits_indices,
+            spec_decode_metadata,
+            num_scheduled_tokens_np) = (self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         if (self.use_cuda_graph
                 and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):

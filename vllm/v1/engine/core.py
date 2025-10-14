@@ -47,7 +47,8 @@ from vllm.version import __version__ as VLLM_VERSION
 from vllm.distributed.parallel_state import (get_dtp_group_request, 
                                             get_dtp_group_state, 
                                             get_dtp_group, 
-                                            set_dtp_group_request)
+                                            set_dtp_group_request,
+                                            get_dtp_group_world_size)
 import torch.distributed as dist
 
 logger = init_logger(__name__)
@@ -230,6 +231,16 @@ class EngineCore:
             dump_engine_exception(self.vllm_config, scheduler_output,
                                   self.scheduler.make_stats())
             raise err
+    
+    def kv_cache_config_reset(self,):
+        dtp_size = get_dtp_group_world_size()
+        self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
+        self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
+        # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
+        # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
+        self.scheduler.block_size //= dtp_size
+        for i, manager in enumerate(self.scheduler.kv_cache_manager.coordinator.single_type_managers):
+            manager.block_size //= dtp_size
 
     def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
         """Schedule, execute, and make output.
@@ -259,6 +270,7 @@ class EngineCore:
                 # logger.info(f"Engine {self.engine_index} switching DTP group state to False"
                 #             f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
+                self.kv_cache_config_reset()
 
         return (engine_core_outputs,
                 scheduler_output.total_num_scheduled_tokens > 0)
