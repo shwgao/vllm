@@ -339,6 +339,7 @@ async def benchmark(
     test_output = await request_func(request_func_input=test_input)
     
     # print test output text
+    print(test_input.prompt)
     print(test_output.generated_text)
     
     return
@@ -1086,5 +1087,9 @@ if __name__ == "__main__":
     args.dataset_name = "sonnet"
     args.num_prompts = 1
     args.dataset_path = "./benchmarks/sonnet.txt"
+    
+    # args.dataset_name = "custom"
+    # args.num_prompts = 1
+    # args.dataset_path = "./benchmarks/sonnet.jsonl"
     
     main(args)

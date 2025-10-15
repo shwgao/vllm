@@ -1281,7 +1281,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         dtp_size = get_dtp_group_world_size()
         original_block_size = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
         original_num_kv_heads = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
-        for kv_cache_group_id, kv_cache_group_spec in enumerate(
+        for kv_cache_group_id, _ in enumerate(
                 self.kv_cache_config.kv_cache_groups):
             # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size * dtp_size
             # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads // dtp_size
@@ -1292,7 +1292,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         try:
             yield
         finally:
-            for kv_cache_group_id, kv_cache_group_spec in enumerate(
+            for kv_cache_group_id, _ in enumerate(
                 self.kv_cache_config.kv_cache_groups):
                 # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size
                 # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads

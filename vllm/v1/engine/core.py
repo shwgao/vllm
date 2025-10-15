@@ -239,7 +239,7 @@ class EngineCore:
         # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
         # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
         self.scheduler.block_size //= dtp_size
-        for i, manager in enumerate(self.scheduler.kv_cache_manager.coordinator.single_type_managers):
+        for _, manager in enumerate(self.scheduler.kv_cache_manager.coordinator.single_type_managers):
             manager.block_size //= dtp_size
 
     def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
@@ -271,6 +271,11 @@ class EngineCore:
                 #             f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
                 self.kv_cache_config_reset()
+        
+        # not all the dtp ranks return the result to the coordinator
+        if self.scheduler.long_request_execution_mode:
+            if not self.dp_rank == self.scheduler.long_request_engines[0]:
+                return {}, scheduler_output.total_num_scheduled_tokens > 0
 
         return (engine_core_outputs,
                 scheduler_output.total_num_scheduled_tokens > 0)
