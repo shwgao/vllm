@@ -1,18 +1,18 @@
-MODEL="gradientai/Llama-3-8B-Instruct-Gradient-1048k" 
-TP=1
-DP=2
-MAX_MODEL_LEN=122000 
-OUTPUT_LEN=128 
-RESULTS_FILE="benchmark_serve_1tp_1sp_2dp_random_2gpus.csv" 
-OUTPUT_FILE="benchmark_serve_1tp_1sp_2dp_random_2gpus.txt" 
+MODEL="meta-llama/Meta-Llama-3-70B-Instruct" 
+TP=2
+DP=1
+MAX_MODEL_LEN=22000 
+OUTPUT_LEN=2
+RESULTS_FILE="benchmark_serve_2tp_1sp_1dp_random_2gpus.csv" 
+OUTPUT_FILE="benchmark_serve_2tp_1sp_1dp_random_2gpus.txt" 
 
 # # 设置vllm路径
 # VLLM_PATH="/nfs/hpc/share/gaosho/conda_envs/arctic-inference/bin/vllm"
 
 # 参数列表
 chunk_prefill_list=(8192)
-input_len_list=(60000)
-request_rate_list=(1 2)
+input_len_list=(100 200 400 800 1600 3200 6400 12800 16000 18000 20000 21900)
+request_rate_list=(100)
 
 # 服务器相关变量
 SERVER_PORT=8000
@@ -27,7 +27,7 @@ export CUDA_VISIBLE_DEVICES=0,1
 # 启动服务器的函数
 start_server() {
     echo "Starting vLLM server..."
-    vllm serve $MODEL \
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm serve $MODEL \
         --disable-log-requests \
         --tensor-parallel-size $TP \
         --data-parallel-size $DP \
@@ -36,6 +36,9 @@ start_server() {
         --host $SERVER_HOST \
         --trust-remote-code \
         --enforce-eager \
+        --max-num-seqs 100 \
+        --no-enable-prefix-caching \
+        --gpu-memory-utilization 0.9 \
         --max-num-batched-tokens $1 > server.log 2>&1 &
     
     SERVER_PID=$!
@@ -43,7 +46,7 @@ start_server() {
     
     # 等待服务器启动
     echo "Waiting for server to start..."
-    sleep 120
+    sleep 320
     
     # 检查服务器是否正在运行
     if ! kill -0 $SERVER_PID 2>/dev/null; then
@@ -152,7 +155,7 @@ for chunk_prefill in "${chunk_prefill_list[@]}"; do
                 --dataset-path None \
                 --random-input-len $input_len \
                 --random-output-len $OUTPUT_LEN \
-                --random-range-ratio 0.8 \
+                --random-range-ratio 0 \
                 --request-rate $request_rate \
                 --num-prompts 300 \
                 --host $SERVER_HOST \
