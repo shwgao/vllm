@@ -1078,11 +1078,11 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
-    # args.random_input_len = 2048
+    # args.random_input_len = 10000
     # args.num_prompts = 100
     # args.random_output_len = 2
     # args.random_range_ratio = 0.5
-    # args.request_rate = 10
+    # args.request_rate = 1
     
     args.dataset_name = "sonnet"
     args.num_prompts = 1

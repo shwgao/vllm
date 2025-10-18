@@ -608,7 +608,7 @@ class Scheduler(SchedulerInterface):
     
     def kv_cache_config_set(self,):
         """Set kv cache config, I reset the config back at engine core level"""
-        dtp_size = get_dtp_group_world_size()
+        dtp_size = len(self.long_request_engines)
         self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
         self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
         # self.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
@@ -720,6 +720,7 @@ class Scheduler(SchedulerInterface):
             grammar_bitmask=None,
             pending_long_request_sync_id=None,
             switch_dtp_group_state=switch_dtp_group_state,
+            long_request_engine_ids=self.long_request_engines,
         )
         
         # Update request state

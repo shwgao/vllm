@@ -161,3 +161,6 @@ class SchedulerOutput:
     
     # Whether to switch the DTP group state
     switch_dtp_group_state: bool = False
+    
+    # Long request engine IDs
+    long_request_engine_ids: Optional[list[int]] = field(default_factory=lambda: [0, 1])

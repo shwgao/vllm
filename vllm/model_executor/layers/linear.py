@@ -279,6 +279,7 @@ class LinearBase(torch.nn.Module):
         
         self.shard_status = False
         self.old_weight = None
+        self.long_request_engine_ids = [0, 1]
 
     def forward(
         self, x: torch.Tensor
@@ -309,7 +310,7 @@ class LinearBase(torch.nn.Module):
             return
 
         self.shard_status = True
-        dtp_size = get_dtp_group_world_size()
+        dtp_size = len(self.long_request_engine_ids)
         dp_rank = get_dp_group().rank_in_group
         self.old_weight = self.weight
         

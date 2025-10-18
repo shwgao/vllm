@@ -315,6 +315,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # means this layer will perform attention using the keys and values
         # from the KV cache of `shared_kv_cache_layers[layer_name]`.
         self.shared_kv_cache_layers: dict[str, str] = {}
+        
+        self.dtp_context_switch_status = False
+        self.original_status = {}
+        self.long_request_engine_ids = [0, 1]
 
     def _may_reorder_batch(self, scheduler_output: "SchedulerOutput") -> None:
         """
@@ -1270,35 +1274,49 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         )
     
     @contextmanager
-    def dtp_context(self):
+    def dtp_context(self, long_request_engine_ids: list[int]):
         if not get_dtp_group_state():
+            if self.dtp_context_switch_status:
+                self.dtp_context_switch_status = False
+                for kv_cache_group_id, _ in enumerate(
+                    self.kv_cache_config.kv_cache_groups):
+                    # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size
+                    # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads
+                    builder = self.attn_metadata_builders[kv_cache_group_id]
+                    builder.block_size = self.original_status["original_block_size"] // self.original_status["dtp_size"]
+                    builder.num_heads_kv = self.original_status["original_num_kv_heads"] * self.original_status["dtp_size"]
+                self.original_status = {}
+                self.long_request_engine_ids = [0, 1]
             yield
             return
         
+        if self.dtp_context_switch_status:
+            yield
+            return
+        
+        self.dtp_context_switch_status = True
+        self.long_request_engine_ids = long_request_engine_ids
+        self.model.model.long_request_engine_ids = self.long_request_engine_ids
+        self.original_status = {}
+        self.original_status["original_block_size"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
+        self.original_status["original_num_kv_heads"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
         # if we are running in DTP group, we need to change the block size
         # original:[2, block_num, block_size, kv_head_num, kv_head_size]
         # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
-        dtp_size = get_dtp_group_world_size()
-        original_block_size = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
-        original_num_kv_heads = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
+        dtp_size = len(self.long_request_engine_ids)
+        self.original_status["dtp_size"] = dtp_size
         for kv_cache_group_id, _ in enumerate(
                 self.kv_cache_config.kv_cache_groups):
             # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size * dtp_size
             # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads // dtp_size
             builder = self.attn_metadata_builders[kv_cache_group_id]
-            builder.block_size = original_block_size
-            builder.num_heads_kv = original_num_kv_heads
+            builder.block_size = self.original_status["original_block_size"] * dtp_size
+            builder.num_heads_kv = self.original_status["original_num_kv_heads"] // dtp_size
         
         try:
             yield
         finally:
-            for kv_cache_group_id, _ in enumerate(
-                self.kv_cache_config.kv_cache_groups):
-                # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size
-                # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads
-                builder = self.attn_metadata_builders[kv_cache_group_id]
-                builder.block_size = original_block_size // dtp_size
-                builder.num_heads_kv = original_num_kv_heads * dtp_size
+            pass
 
     @torch.inference_mode()
     def execute_model(
@@ -1315,7 +1333,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Return empty ModelRunnerOutput if there's no work to do.
             return EMPTY_MODEL_RUNNER_OUTPUT
         
-        with self.dtp_context():
+        with self.dtp_context(scheduler_output.long_request_engine_ids):
             # Prepare the decoder inputs.
             (attn_metadata, attention_cuda_graphs, logits_indices,
             spec_decode_metadata,

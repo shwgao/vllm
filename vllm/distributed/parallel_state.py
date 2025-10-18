@@ -24,6 +24,7 @@ If you only need to use the distributed environment without model/pipeline
 """
 import contextlib
 import gc
+import itertools
 import pickle
 import weakref
 from collections import namedtuple
@@ -888,7 +889,7 @@ def get_pp_group() -> GroupCoordinator:
     return _PP
 
 
-_DTP: Optional[GroupCoordinator] = None
+_DTP: Optional[dict[list[int], GroupCoordinator]] = None
 
 def get_dtp_group() -> GroupCoordinator:
     assert _DTP is not None, ("distributed tensor parallel group is not initialized")
@@ -1128,13 +1129,13 @@ def ensure_model_parallel_initialized(
         f"{pipeline_model_parallel_size=}")
 
 
-def get_dtp_group_world_size() -> int:
+def get_dtp_group_world_size(dp_group=(0, 1)) -> int:
     assert _DTP is not None, ("distributed tensor parallel group is not initialized")
-    return _DTP.world_size
+    return _DTP[dp_group].world_size
 
 
-def get_dynamic_tensor_model_parallel_rank() -> int:
-    return get_dtp_group().rank_in_group
+def get_dynamic_tensor_model_parallel_rank(dp_group=[0, 1]) -> int:
+    return _DTP[dp_group].rank_in_group
 
 
 # _DTP: Optional[GroupCoordinator] = None
@@ -1160,9 +1161,9 @@ def set_dtp_group_state(state: bool) -> None:
     _DTP_STATE = state
 
 
-def get_dtp_group() -> GroupCoordinator:
+def get_dtp_group(dp_group=(0, 1)) -> GroupCoordinator:
     assert _DTP is not None, ("dynamic tensor parallel group is not initialized")
-    return _DTP
+    return _DTP[dp_group]
   
   
 def add_more_parallel_groups(
@@ -1201,35 +1202,52 @@ def add_more_parallel_groups(
     all_ranks = torch.arange(world_size).reshape(
         -1, data_parallel_size, pipeline_model_parallel_size,
         tensor_model_parallel_size)
+    
+    _DTP = {}
+    # we need to enumerate all possible dtp groups, because we could merge different
+    # number if DP groups, also we need to give an interface to user to select which
+    # DP groups to merge into a dtp group. So, we need to enumerate all possible dtp groups.
+    # Use the merged DP ranks as the key, the value is the dtp group(coordinator).
+    number_dp_can_merge = [2, 4, 8]
+    for number_dp in number_dp_can_merge:
+        if number_dp > data_parallel_size:
+            break
+        group_dp_list = list(itertools.combinations(range(data_parallel_size), number_dp))
+        group_ranks_list = [all_ranks[:, group_dp_list[i], :, :].reshape(-1, number_dp * tensor_model_parallel_size).tolist() for i in range(len(group_dp_list))]
+        
+        for i in range(len(group_ranks_list)):
+            group_ranks = group_ranks_list[i]
+            
+            # # Merge all DP x TP participants per pipeline stage into one communicator
+            # # so each PP stage owns a cross-DP TP communicator.
+            # group_ranks = all_ranks.transpose(1, 2).reshape(
+            #     -1, pipeline_model_parallel_size, data_parallel_size * tensor_model_parallel_size)
+            # group_ranks_list: list[list[int]] = []
+            # for slab in group_ranks.unbind(0):  # each slab: [PP, DP*TP]
+            #     for pp_row in slab.unbind(0):   # each row: [DP*TP]
+            #         group_ranks_list.append(pp_row.tolist())
 
-    # Merge all DP x TP participants per pipeline stage into one communicator
-    # so each PP stage owns a cross-DP TP communicator.
-    group_ranks = all_ranks.transpose(1, 2).reshape(
-        -1, pipeline_model_parallel_size, data_parallel_size * tensor_model_parallel_size)
-    group_ranks_list: list[list[int]] = []
-    for slab in group_ranks.unbind(0):  # each slab: [PP, DP*TP]
-        for pp_row in slab.unbind(0):   # each row: [DP*TP]
-            group_ranks_list.append(pp_row.tolist())
+            # Use the correct local GPU index for binding device communicators.
+            local_rank = get_world_group().local_rank
+            assert 0 <= local_rank < torch.cuda.device_count(), (
+                f"Invalid local_rank {local_rank} with device_count={torch.cuda.device_count()}")
 
-    # Use the correct local GPU index for binding device communicators.
-    local_rank = get_world_group().local_rank
-    assert 0 <= local_rank < torch.cuda.device_count(), (
-        f"Invalid local_rank {local_rank} with device_count={torch.cuda.device_count()}")
+            _DTP[group_dp_list[i]] = init_model_parallel_group(
+                group_ranks,
+                local_rank,
+                backend,
+                use_message_queue_broadcaster=True,
+                group_name="dtp_{}".format(group_dp_list[i])
+            )
 
-    _DTP = init_model_parallel_group(
-        group_ranks_list,
-        local_rank,
-        backend,
-        use_message_queue_broadcaster=True,
-        group_name="dtp"
-    )
-
-    logger.info(
-        "Created _DTP groups. Current rank %s: "
-        "DTP rank %s (if in group)",
-        rank,
-        _DTP.rank_in_group if _DTP and rank in _DTP.ranks else "N/A",
-    )
+            logger.info(
+                "Created _DTP groups. Current rank %s: ",
+                "Current DTP group: %s",
+                "DTP rank %s (if in group)",
+                rank,
+                group_dp_list[i],
+                _DTP[group_dp_list[i]].rank_in_group if _DTP and rank in group_dp_list[i] else "N/A",
+            )
 
 
 def prepare_communication_buffer_for_model(model: torch.nn.Module):
@@ -1250,7 +1268,8 @@ def prepare_communication_buffer_for_model(model: torch.nn.Module):
         
     logger.info(f"shouwei modified: prepare_communication_buffer_for_model() is called")
     if _DTP is not None:
-        _DTP.prepare_communication_buffer_for_model(model)
+        for dp_group in _DTP.keys():
+            _DTP[dp_group].prepare_communication_buffer_for_model(model)
 
 
 def model_parallel_is_initialized():

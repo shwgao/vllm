@@ -232,8 +232,8 @@ class EngineCore:
                                   self.scheduler.make_stats())
             raise err
     
-    def kv_cache_config_reset(self,):
-        dtp_size = get_dtp_group_world_size()
+    def kv_cache_config_reset(self, scheduler_output: SchedulerOutput):
+        dtp_size = len(scheduler_output.long_request_engine_ids)
         self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
         self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
         # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
@@ -270,7 +270,7 @@ class EngineCore:
                 # logger.info(f"Engine {self.engine_index} switching DTP group state to False"
                 #             f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
-                self.kv_cache_config_reset()
+                self.kv_cache_config_reset(scheduler_output)
         
         # not all the dtp ranks return the result to the coordinator
         if self.scheduler.long_request_execution_mode:
