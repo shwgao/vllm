@@ -609,10 +609,10 @@ class Scheduler(SchedulerInterface):
     def kv_cache_config_set(self,):
         """Set kv cache config, I reset the config back at engine core level"""
         dtp_size = len(self.long_request_engines)
-        self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
-        self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
-        # self.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
-        # self.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
+        if not self.kv_cache_manager.kv_cache_config.change_status_for_dtp:
+            self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size *= dtp_size
+            self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads //= dtp_size
+            self.kv_cache_manager.kv_cache_config.change_status_for_dtp = True
         self.block_size *= dtp_size
         for i, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
             manager.block_size *= dtp_size

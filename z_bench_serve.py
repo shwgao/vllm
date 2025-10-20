@@ -1084,12 +1084,12 @@ if __name__ == "__main__":
     # args.random_range_ratio = 0.5
     # args.request_rate = 1
     
-    args.dataset_name = "sonnet"
+    # args.dataset_name = "sonnet"
+    # args.num_prompts = 1
+    # args.dataset_path = "./benchmarks/sonnet.txt"
+    
+    args.dataset_name = "custom"
     args.num_prompts = 1
     args.dataset_path = "./benchmarks/sonnet.txt"
-    
-    # args.dataset_name = "custom"
-    # args.num_prompts = 1
-    # args.dataset_path = "./benchmarks/sonnet.jsonl"
     
     main(args)

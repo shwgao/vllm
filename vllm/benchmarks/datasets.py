@@ -749,7 +749,8 @@ class CustomDataset(BenchmarkDataset):
         # This will be the standardized format which load_data()
         # has to convert into depending on the filetype of dataset_path.
         # sample() will assume this standardized format of self.data
-        self.data = []
+        self.data = [{"prompt": "What is the capital of China?"}]
+        return
 
         # Load the JSONL file
         if self.dataset_path.endswith(".jsonl"):

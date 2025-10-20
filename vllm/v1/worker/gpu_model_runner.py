@@ -1278,13 +1278,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if not get_dtp_group_state():
             if self.dtp_context_switch_status:
                 self.dtp_context_switch_status = False
-                for kv_cache_group_id, _ in enumerate(
+                for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
-                    # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size
-                    # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads
+                    kv_cache_group_spec.kv_cache_spec.block_size = self.original_status["original_block_size"]
+                    kv_cache_group_spec.kv_cache_spec.num_kv_heads = self.original_status["original_num_kv_heads"]
+                    self.kv_cache_config.change_status_for_dtp = False
                     builder = self.attn_metadata_builders[kv_cache_group_id]
-                    builder.block_size = self.original_status["original_block_size"] // self.original_status["dtp_size"]
-                    builder.num_heads_kv = self.original_status["original_num_kv_heads"] * self.original_status["dtp_size"]
+                    builder.block_size = self.original_status["original_block_size"]
+                    builder.num_heads_kv = self.original_status["original_num_kv_heads"]
                 self.original_status = {}
                 self.long_request_engine_ids = [0, 1]
             yield
@@ -1305,10 +1306,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
         dtp_size = len(self.long_request_engine_ids)
         self.original_status["dtp_size"] = dtp_size
-        for kv_cache_group_id, _ in enumerate(
+        for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
-            # kv_cache_group_spec.kv_cache_spec.block_size = original_block_size * dtp_size
-            # kv_cache_group_spec.kv_cache_spec.num_kv_heads = original_num_kv_heads // dtp_size
+            if not self.kv_cache_config.change_status_for_dtp:
+                kv_cache_group_spec.kv_cache_spec.block_size = self.original_status["original_block_size"] * dtp_size
+                kv_cache_group_spec.kv_cache_spec.num_kv_heads = self.original_status["original_num_kv_heads"] // dtp_size
+                self.kv_cache_config.change_status_for_dtp = True
             builder = self.attn_metadata_builders[kv_cache_group_id]
             builder.block_size = self.original_status["original_block_size"] * dtp_size
             builder.num_heads_kv = self.original_status["original_num_kv_heads"] // dtp_size

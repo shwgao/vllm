@@ -236,8 +236,7 @@ class EngineCore:
         dtp_size = len(scheduler_output.long_request_engine_ids)
         self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
         self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
-        # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size //= dtp_size
-        # self.scheduler.kv_cache_manager.coordinator.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads *= dtp_size
+        self.scheduler.kv_cache_manager.kv_cache_config.change_status_for_dtp = False
         self.scheduler.block_size //= dtp_size
         for _, manager in enumerate(self.scheduler.kv_cache_manager.coordinator.single_type_managers):
             manager.block_size //= dtp_size

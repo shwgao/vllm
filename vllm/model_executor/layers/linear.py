@@ -17,8 +17,8 @@ from vllm.distributed import (divide, get_tensor_model_parallel_rank,
                               tensor_model_parallel_all_reduce,
                               get_dtp_group_world_size,
                               get_dtp_group_state, 
-                              get_dtp_group,
                               get_dp_group,
+                              get_tp_group,
                               get_dynamic_tensor_model_parallel_rank,
                               dynamic_tensor_model_parallel_all_reduce,
                               )
@@ -312,6 +312,7 @@ class LinearBase(torch.nn.Module):
         self.shard_status = True
         dtp_size = len(self.long_request_engine_ids)
         dp_rank = get_dp_group().rank_in_group
+        dp_index = self.long_request_engine_ids.index(dp_rank)
         self.old_weight = self.weight
         
         # original weight shape: [6144, 4096], and the first dimension 6144 is 
@@ -323,7 +324,6 @@ class LinearBase(torch.nn.Module):
         
         if isinstance(self, ColumnParallelLinear):
             original_partition = self.output_partition_sizes # [4096, 1024, 1024]
-            shard_size = divide(self.output_size, dtp_size)
             shard_partition_sizes = [divide(partition_size, dtp_size) for partition_size in original_partition]
 
             # Calculate the start and end indices for each partition (Q, K, V)
@@ -335,8 +335,8 @@ class LinearBase(torch.nn.Module):
             shard_start_indices = []
             shard_end_indices = []
             for i, (offset, partition_size) in enumerate(zip(partition_offsets[:-1], original_partition)):
-                shard_start = offset + dp_rank * shard_partition_sizes[i]
-                shard_end = offset + (dp_rank + 1) * shard_partition_sizes[i]
+                shard_start = offset + dp_index * shard_partition_sizes[i]
+                shard_end = offset + (dp_index + 1) * shard_partition_sizes[i]
                 shard_start_indices.append(shard_start)
                 shard_end_indices.append(shard_end)
             
@@ -349,12 +349,28 @@ class LinearBase(torch.nn.Module):
             new_weight = torch.cat(sharded_weights, dim=0)
         
             self.weight = Parameter(new_weight)
+            
+            output_weight = False
+            if output_weight:
+                # write weight to file csv
+                tp_rank = get_tp_group().rank_in_group
+                # Use more descriptive filename to avoid conflicts
+                weight_file = f"linear_weight_tp{tp_rank}_{id(self)}.csv"
+                
+                # Convert to float32 first to handle BFloat16 and other unsupported types
+                weight_cpu = self.weight.data.cpu().float().numpy()  # Move to CPU and convert to float32
+                
+                # Use numpy.savetxt for better performance and proper CSV format
+                import numpy as np
+                np.savetxt(weight_file, weight_cpu, delimiter=',', fmt='%.6f')
+                logger.info(f"Weight saved to {weight_file}, shape: {weight_cpu.shape}")
+            
         elif isinstance(self, RowParallelLinear):
             # For RowParallelLinear, we need to shard along the second dimension
             original_partition = self.input_size_per_partition # [4096, 1024, 1024]
             shard_size = divide(original_partition, dtp_size)
-            shard_start = dp_rank * shard_size
-            shard_end = (dp_rank + 1) * shard_size
+            shard_start = dp_index * shard_size
+            shard_end = (dp_index + 1) * shard_size
             self.weight = Parameter(self.old_weight[:, shard_start:shard_end])
         else:
             raise ValueError(f"Unimplemented DTP layer type: {type(self)}")
