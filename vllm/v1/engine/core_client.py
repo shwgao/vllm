@@ -966,10 +966,10 @@ class DPAsyncMPClient(AsyncMPClient):
         request.client_index = self.client_index
         
         # shouwei added. TODO: add interface for the threshold.
-        long_request_threshold = 1#10000000
+        long_request_threshold = 110000000
         request.is_long_request = len(request.prompt_token_ids) > long_request_threshold
         if request.is_long_request:
-            request.long_request_engine_num = 2
+            request.long_request_engine_num = 4
 
         chosen_engines = self.get_core_engine_for_request(request)
         logger.info(f"chosen_engines: {chosen_engines} for request {request.request_id}")
@@ -998,6 +998,7 @@ class DPAsyncMPClient(AsyncMPClient):
         self._ensure_output_queue_task()
 
     def get_core_engine_for_request(self, request: EngineCoreRequest):
+        print("Using normal engine selection")
         return self.core_engine
 
 

@@ -1278,14 +1278,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if not get_dtp_group_state():
             if self.dtp_context_switch_status:
                 self.dtp_context_switch_status = False
+                dtp_size = len(self.long_request_engine_ids)
                 for kv_cache_group_id, kv_cache_group_spec in enumerate(
                     self.kv_cache_config.kv_cache_groups):
-                    kv_cache_group_spec.kv_cache_spec.block_size = self.original_status["original_block_size"]
-                    kv_cache_group_spec.kv_cache_spec.num_kv_heads = self.original_status["original_num_kv_heads"]
-                    self.kv_cache_config.change_status_for_dtp = False
-                    builder = self.attn_metadata_builders[kv_cache_group_id]
-                    builder.block_size = self.original_status["original_block_size"]
-                    builder.num_heads_kv = self.original_status["original_num_kv_heads"]
+                    if self.kv_cache_config.change_status_for_dtp:
+                        kv_cache_group_spec.kv_cache_spec.block_size //= dtp_size
+                        kv_cache_group_spec.kv_cache_spec.num_kv_heads *= dtp_size
+                        builder = self.attn_metadata_builders[kv_cache_group_id]
+                        builder.block_size //= dtp_size
+                        builder.num_heads_kv *= dtp_size
+                        self.kv_cache_config.change_status_for_dtp = False
                 self.original_status = {}
                 self.long_request_engine_ids = [0, 1]
             yield
@@ -1296,11 +1298,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             return
         
         self.dtp_context_switch_status = True
-        self.long_request_engine_ids = long_request_engine_ids
+        self.long_request_engine_ids = tuple(sorted(long_request_engine_ids))
         self.model.model.long_request_engine_ids = self.long_request_engine_ids
-        self.original_status = {}
-        self.original_status["original_block_size"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
-        self.original_status["original_num_kv_heads"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
+        # self.original_status = {}
+        # self.original_status["original_block_size"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
+        # self.original_status["original_num_kv_heads"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
         # if we are running in DTP group, we need to change the block size
         # original:[2, block_num, block_size, kv_head_num, kv_head_size]
         # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
@@ -1309,12 +1311,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         for kv_cache_group_id, kv_cache_group_spec in enumerate(
                 self.kv_cache_config.kv_cache_groups):
             if not self.kv_cache_config.change_status_for_dtp:
-                kv_cache_group_spec.kv_cache_spec.block_size = self.original_status["original_block_size"] * dtp_size
-                kv_cache_group_spec.kv_cache_spec.num_kv_heads = self.original_status["original_num_kv_heads"] // dtp_size
+                kv_cache_group_spec.kv_cache_spec.block_size *= dtp_size
+                kv_cache_group_spec.kv_cache_spec.num_kv_heads //= dtp_size
+                builder = self.attn_metadata_builders[kv_cache_group_id]
+                builder.block_size *= dtp_size
+                builder.num_heads_kv //= dtp_size
                 self.kv_cache_config.change_status_for_dtp = True
-            builder = self.attn_metadata_builders[kv_cache_group_id]
-            builder.block_size = self.original_status["original_block_size"] * dtp_size
-            builder.num_heads_kv = self.original_status["original_num_kv_heads"] // dtp_size
         
         try:
             yield

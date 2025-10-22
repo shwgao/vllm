@@ -148,12 +148,12 @@ class LlamaAttention(nn.Module):
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
         
-        # shouwei modified
-        self.dtp_size = get_dtp_group_world_size()
-        self.dtp_num_heads = self.total_num_heads // self.dtp_size
-        self.dtp_num_kv_heads = self.total_num_kv_heads // self.dtp_size
-        self.dtp_q_size = self.dtp_num_heads * self.head_dim
-        self.dtp_kv_size = self.dtp_num_kv_heads * self.head_dim
+        # # shouwei modified
+        # self.dtp_size = get_dtp_group_world_size()
+        # self.dtp_num_heads = self.total_num_heads // self.dtp_size
+        # self.dtp_num_kv_heads = self.total_num_kv_heads // self.dtp_size
+        # self.dtp_q_size = self.dtp_num_heads * self.head_dim
+        # self.dtp_kv_size = self.dtp_num_kv_heads * self.head_dim
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size=hidden_size,
@@ -303,7 +303,7 @@ class LlamaDecoderLayer(nn.Module):
         self.original_status = {}
         
     @contextmanager
-    def dtp_context(self, long_request_engine_ids: list[int]):
+    def dtp_context(self, long_request_engine_ids: tuple[int, ...]):
         """Temporarily switch to DTP context.
 
         - Delegates head/size adjustments to `self.self_attn.dtp_context()`.
@@ -385,7 +385,7 @@ class LlamaDecoderLayer(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: Optional[torch.Tensor],
-        long_request_engine_ids: list[int],
+        long_request_engine_ids: tuple[int, ...],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
         with self.dtp_context(long_request_engine_ids):
@@ -455,7 +455,7 @@ class LlamaModel(nn.Module):
             make_empty_intermediate_tensors_factory(
                 ["hidden_states", "residual"], config.hidden_size))
 
-        self.long_request_engine_ids = [0, 1]
+        self.long_request_engine_ids = (0, 1)
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -651,7 +651,7 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
         self.make_empty_intermediate_tensors = (
             self.model.make_empty_intermediate_tensors)
 
-        self.long_request_engine_ids = [0, 1]
+        self.long_request_engine_ids = (0, 1)
 
     def set_aux_hidden_state_layers(self, layers: tuple[int]) -> None:
         self.model.aux_hidden_state_layers = layers

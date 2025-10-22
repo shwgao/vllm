@@ -279,7 +279,7 @@ class LinearBase(torch.nn.Module):
         
         self.shard_status = False
         self.old_weight = None
-        self.long_request_engine_ids = [0, 1]
+        self.long_request_engine_ids = (0, 1)
 
     def forward(
         self, x: torch.Tensor
@@ -1426,7 +1426,7 @@ class RowParallelLinear(LinearBase):
                                                     bias=bias_)
         if self.reduce_results and self.tp_size > 1:
             if get_dtp_group_state():
-                output = dynamic_tensor_model_parallel_all_reduce(output_parallel)
+                output = dynamic_tensor_model_parallel_all_reduce(output_parallel, group_name=self.long_request_engine_ids)
             else:
                 output = tensor_model_parallel_all_reduce(output_parallel)
         else:

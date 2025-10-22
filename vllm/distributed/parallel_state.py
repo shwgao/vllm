@@ -233,6 +233,10 @@ class GroupCoordinator:
                 self.rank_in_group = ranks.index(self.rank)
                 self.device_group = device_group
                 self.cpu_group = cpu_group
+                
+        if self.cpu_group is None:
+            self.device_communicator = None
+            return
 
         assert self.cpu_group is not None
         assert self.device_group is not None
@@ -1232,6 +1236,7 @@ def add_more_parallel_groups(
             assert 0 <= local_rank < torch.cuda.device_count(), (
                 f"Invalid local_rank {local_rank} with device_count={torch.cuda.device_count()}")
 
+            # if rank in group_ranks[0]:
             _DTP[group_dp_list[i]] = init_model_parallel_group(
                 group_ranks,
                 local_rank,
@@ -1241,13 +1246,12 @@ def add_more_parallel_groups(
             )
 
             logger.info(
-                "Created _DTP groups. Current rank %s: ",
-                "Current DTP group: %s",
-                "DTP rank %s (if in group)",
+                "Created _DTP groups. Current rank: %s, Current DTP group: %s",
                 rank,
-                group_dp_list[i],
-                _DTP[group_dp_list[i]].rank_in_group if _DTP and rank in group_dp_list[i] else "N/A",
+                group_ranks,
             )
+            
+            # torch.distributed.barrier()
 
 
 def prepare_communication_buffer_for_model(model: torch.nn.Module):
@@ -1269,7 +1273,8 @@ def prepare_communication_buffer_for_model(model: torch.nn.Module):
     logger.info(f"shouwei modified: prepare_communication_buffer_for_model() is called")
     if _DTP is not None:
         for dp_group in _DTP.keys():
-            _DTP[dp_group].prepare_communication_buffer_for_model(model)
+            if _DTP[dp_group].device_communicator is not None:
+                _DTP[dp_group].prepare_communication_buffer_for_model(model)
 
 
 def model_parallel_is_initialized():

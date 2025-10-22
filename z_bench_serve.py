@@ -338,11 +338,11 @@ async def benchmark(
 
     test_output = await request_func(request_func_input=test_input)
     
-    # print test output text
-    print(test_input.prompt)
-    print(test_output.generated_text)
+    # # print test output text
+    # print(test_input.prompt)
+    # print(test_output.generated_text)
     
-    return
+    # return
     
     if not test_output.success:
         raise ValueError(
@@ -675,7 +675,7 @@ def add_cli_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--model",
         type=str,
-        default="./models/gradientai-Llama-3-8B-Instruct-Gradient-1048k",
+        default="gradientai/Llama-3-8B-Instruct-Gradient-1048k",
         help="Name of the model.",
     )
     parser.add_argument(
@@ -1078,18 +1078,18 @@ if __name__ == "__main__":
     )
     add_cli_args(parser)
     args = parser.parse_args()
-    # args.random_input_len = 10000
-    # args.num_prompts = 100
-    # args.random_output_len = 2
-    # args.random_range_ratio = 0.5
-    # args.request_rate = 1
+    args.random_input_len = 128000
+    args.num_prompts = 100
+    args.random_output_len = 2
+    args.random_range_ratio = 0
+    args.request_rate = 4
     
     # args.dataset_name = "sonnet"
     # args.num_prompts = 1
     # args.dataset_path = "./benchmarks/sonnet.txt"
     
-    args.dataset_name = "custom"
-    args.num_prompts = 1
-    args.dataset_path = "./benchmarks/sonnet.txt"
-    
+    # args.dataset_name = "custom"
+    # args.num_prompts = 1
+    # args.dataset_path = "./benchmarks/sonnet.txt"
+
     main(args)

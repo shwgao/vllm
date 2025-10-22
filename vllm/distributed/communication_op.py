@@ -14,9 +14,9 @@ def tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
     return get_tp_group().all_reduce(input_)
 
 
-def dynamic_tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
+def dynamic_tensor_model_parallel_all_reduce(input_: torch.Tensor, group_name: tuple[int, ...]=(0, 1)) -> torch.Tensor:
     """All-reduce the input tensor across dynamic tensor model parallel group."""
-    return get_dtp_group().all_reduce(input_)
+    return get_dtp_group(group_name).all_reduce(input_)
 
 
 def tensor_model_parallel_all_gather(input_: torch.Tensor,
