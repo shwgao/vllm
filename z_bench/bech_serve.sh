@@ -4,15 +4,15 @@ TP=1
 DP=4
 MAX_MODEL_LEN=420000 
 OUTPUT_LEN=2
-RESULTS_FILE="benchmark_throughput-ours_1tp_1sp_4dp_random_4gpus_llama-3-8b.csv" 
-OUTPUT_FILE="benchmark_throughput-ours_1tp_1sp_4dp_random_4gpus_llama-3-8b.txt" 
+RESULTS_FILE="benchmark_throughput-OrDP_1tp_1sp_4dp_random_4gpus_llama-3-8b.csv" 
+OUTPUT_FILE="benchmark_throughput-OrDP_1tp_1sp_4dp_random_4gpus_llama-3-8b.txt" 
 
 # # 设置vllm路径
 # VLLM_PATH="/nfs/hpc/share/gaosho/conda_envs/arctic-inference/bin/vllm"
 
 # 参数列表
 chunk_prefill_list=(8192)
-input_len_list=(1000 2000 4000 8000 16000 32000 64000 128000 200000 256000 320000 400000)
+input_len_list=(1000 2000 4000 8000 16000 32000 64000 128000 200000)
 request_rate_list=(300)
 
 # 服务器相关变量
@@ -23,7 +23,7 @@ SERVER_PID=""
 # 写表头
 echo "chunk_prefill,input_len,request_rate,successful_requests,benchmark_duration,request_throughput,output_token_throughput,total_token_throughput,mean_ttft,median_ttft,p99_ttft,mean_tpot,median_tpot,p99_tpot,mean_itl,median_itl,p99_itl" > $RESULTS_FILE
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=1,3,4,5
 
 # 启动服务器的函数
 start_server() {
