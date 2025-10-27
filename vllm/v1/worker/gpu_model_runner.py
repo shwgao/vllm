@@ -38,7 +38,9 @@ from vllm.distributed.parallel_state import (
     get_tp_group,
     graph_capture,
     is_global_first_rank,
-    prepare_communication_buffer_for_model,
+    prepare_communication_buffer_for_model, 
+    get_dtp_group_state, 
+    get_dtp_group_world_size,
 )
 from vllm.forward_context import BatchDescriptor, set_forward_context
 from vllm.logger import init_logger
@@ -150,6 +152,8 @@ from .utils import (
     sanity_check_mm_encoder_outputs,
     scatter_mm_placeholders,
 )
+
+from dataclasses import replace
 
 if TYPE_CHECKING:
     from vllm.model_executor.model_loader.tensorizer import TensorizerConfig
@@ -502,6 +506,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             device="cpu",
             pin_memory=self.pin_memory,
         )
+        
+        self.dtp_context_switch_status = False
+        self.original_status = {}
+        self.long_request_engine_ids = [0, 1]
 
     def reset_mm_cache(self) -> None:
         if self.mm_budget:
@@ -2417,6 +2425,71 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             **model_kwargs,
         )
 
+    @contextmanager
+    def dtp_context(self, long_request_engine_ids: list[int]):
+        if not get_dtp_group_state():
+            if self.dtp_context_switch_status:
+                self.dtp_context_switch_status = False
+                dtp_size = len(self.long_request_engine_ids)
+                for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                    self.kv_cache_config.kv_cache_groups):
+                    if self.kv_cache_config.change_status_for_dtp:
+                        current_spec = kv_cache_group_spec.kv_cache_spec
+                        new_spec = replace(current_spec,
+                                           block_size=current_spec.block_size // dtp_size,
+                                           num_kv_heads=current_spec.num_kv_heads * dtp_size)
+                        kv_cache_group_spec.kv_cache_spec = new_spec
+                        # Get metadata builder from attn_groups instead of attn_metadata_builders
+                        if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
+                            attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
+                            builder = attn_group.get_metadata_builder()
+                            builder.block_size //= dtp_size
+                            builder.num_heads_kv *= dtp_size
+                        self.kv_cache_config.change_status_for_dtp = False
+                self.input_batch.block_table.block_tables[0].block_size //= dtp_size
+                
+                self.original_status = {}
+                self.long_request_engine_ids = [0, 1]
+            yield
+            return
+        
+        if self.dtp_context_switch_status:
+            yield
+            return
+        
+        self.dtp_context_switch_status = True
+        self.long_request_engine_ids = tuple(sorted(long_request_engine_ids))
+        self.model.model.long_request_engine_ids = self.long_request_engine_ids
+        # self.original_status = {}
+        # self.original_status["original_block_size"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.block_size
+        # self.original_status["original_num_kv_heads"] = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec.num_kv_heads
+        # if we are running in DTP group, we need to change the block size
+        # original:[2, block_num, block_size, kv_head_num, kv_head_size]
+        # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
+        dtp_size = len(self.long_request_engine_ids)
+        self.original_status["dtp_size"] = dtp_size
+        self.input_batch.block_table.block_tables[0].block_size *= dtp_size
+        for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                self.kv_cache_config.kv_cache_groups):
+            if not self.kv_cache_config.change_status_for_dtp:
+                current_spec = kv_cache_group_spec.kv_cache_spec
+                new_spec = replace(current_spec,
+                                   block_size=current_spec.block_size * dtp_size,
+                                   num_kv_heads=current_spec.num_kv_heads // dtp_size)
+                kv_cache_group_spec.kv_cache_spec = new_spec
+                # Get metadata builder from attn_groups instead of attn_metadata_builders
+                if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
+                    attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
+                    builder = attn_group.get_metadata_builder()
+                    builder.block_size *= dtp_size
+                    builder.num_heads_kv //= dtp_size
+                self.kv_cache_config.change_status_for_dtp = True
+        
+        try:
+            yield
+        finally:
+            pass
+
     @torch.inference_mode()
     def execute_model(
         self,
@@ -2443,17 +2516,18 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     )
 
                 # Prepare the decoder inputs.
-                (
-                    attn_metadata,
-                    logits_indices,
-                    spec_decode_metadata,
-                    num_scheduled_tokens_np,
-                    spec_decode_common_attn_metadata,
-                    max_query_len,
-                    ubatch_slices,
-                    num_tokens_across_dp,
-                    use_cascade_attn,
-                ) = self._prepare_inputs(scheduler_output)
+                with self.dtp_context(scheduler_output.long_request_engine_ids):
+                    (
+                        attn_metadata,
+                        logits_indices,
+                        spec_decode_metadata,
+                        num_scheduled_tokens_np,
+                        spec_decode_common_attn_metadata,
+                        max_query_len,
+                        ubatch_slices,
+                        num_tokens_across_dp,
+                        use_cascade_attn,
+                    ) = self._prepare_inputs(scheduler_output)
 
             dp_rank = self.parallel_config.data_parallel_rank
             if ubatch_slices:

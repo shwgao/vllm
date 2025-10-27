@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
 
 from vllm._bc_linter import bc_linter_include
 
@@ -174,3 +174,12 @@ class SchedulerOutput:
 
     # KV Cache Connector metadata.
     kv_connector_metadata: KVConnectorMetadata | None = None
+    
+    # Long request synchronization ID that is being scheduled
+    pending_long_request_sync_id: Optional[str] = None
+    
+    # Whether to switch the DTP group state
+    switch_dtp_group_state: bool = False
+    
+    # Long request engine IDs
+    long_request_engine_ids: Optional[list[int]] = field(default_factory=lambda: [0, 1])

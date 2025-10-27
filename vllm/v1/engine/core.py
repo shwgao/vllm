@@ -66,6 +66,14 @@ from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
 
+from vllm.distributed.parallel_state import (get_dtp_group_request, 
+                                            get_dtp_group_state, 
+                                            get_dtp_group, 
+                                            set_dtp_group_request,
+                                            get_dtp_group_world_size)
+import torch.distributed as dist
+from dataclasses import replace
+
 logger = init_logger(__name__)
 
 POLLING_TIMEOUT_S = 2.5
@@ -300,6 +308,18 @@ class EngineCore:
                 self.vllm_config, scheduler_output, self.scheduler.make_stats()
             )
             raise err
+    
+    def kv_cache_config_reset(self, scheduler_output: SchedulerOutput):
+        dtp_size = len(scheduler_output.long_request_engine_ids)
+        current_spec = self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec
+        new_spec = replace(current_spec, 
+                           block_size=current_spec.block_size // dtp_size,
+                           num_kv_heads=current_spec.num_kv_heads * dtp_size)
+        self.scheduler.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec = new_spec
+        self.scheduler.kv_cache_manager.kv_cache_config.change_status_for_dtp = False
+        self.scheduler.block_size //= dtp_size
+        for _, manager in enumerate(self.scheduler.kv_cache_manager.coordinator.single_type_managers):
+            manager.block_size //= dtp_size
 
     def step(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
         """Schedule, execute, and make output.
@@ -312,7 +332,12 @@ class EngineCore:
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
             return {}, False
+
         scheduler_output = self.scheduler.schedule()
+        
+        if scheduler_output.switch_dtp_group_state:
+            # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
+            self.collective_rpc("worker_set_dtp_group_state", args=(True,))
 
         with self.log_error_detail(scheduler_output):
             model_output = self.model_executor.execute_model(scheduler_output)
@@ -320,6 +345,18 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+        
+        if engine_core_outputs:
+            if engine_core_outputs[0].switch_dtp_group_state:
+                # logger.info(f"Engine {self.engine_index} switching DTP group state to False"
+                #             f"at wave index {self.current_wave}")
+                self.collective_rpc("worker_set_dtp_group_state", args=(False,))
+                self.kv_cache_config_reset(scheduler_output)
+        
+        # not all the dtp ranks return the result to the coordinator
+        if self.scheduler.long_request_execution_mode:
+            if not self.dp_rank == self.scheduler.long_request_engines[0]:
+                return {}, scheduler_output.total_num_scheduled_tokens > 0
 
         return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
@@ -1158,6 +1195,9 @@ class DPEngineCoreProc(EngineCoreProc):
                 # We are in a running state and so must execute a dummy pass
                 # if the model didn't execute any ready requests.
                 self.execute_dummy_batch()
+            
+            # 2.5) Check if long request will be executed next step and
+            self._syn_long_request()
 
             # 3) All-reduce operation to determine global unfinished reqs.
             self.engines_running = self._has_global_unfinished_reqs(
@@ -1191,6 +1231,42 @@ class DPEngineCoreProc(EngineCoreProc):
             return True
 
         return ParallelConfig.has_unfinished_dp(self.dp_group, local_unfinished)
+    
+    def _syn_long_request(self):
+        # Synchronize the long request string across all DP ranks
+        long_request_synced = self._sync_long_request_across_dp_ranks(
+            self.scheduler.pending_long_request_sync_id,
+            self.scheduler.long_request_engines)
+        # logger.info(f"long_request_synced: {long_request_synced}")
+        # if one of the DP ranks has the long request synced
+        if long_request_synced:
+            # Sort the long_request_synced dictionary based on rank
+            # long_request_synced.sort(key=min)
+            busy_engines = {}
+            for rank, (sync_long_request, eng_indices) in sorted(
+                (kv for d in long_request_synced for kv in d.items()),
+                key=lambda x: x[0]
+            ):
+                # check if the needed engines are busy or the eng_indices is empty
+                if rank in busy_engines or not eng_indices:
+                    continue
+                else:
+                    for engine_index in eng_indices:
+                        busy_engines[engine_index] = (sync_long_request, eng_indices)
+            
+            if self.dp_rank in busy_engines:
+                self.scheduler.long_request_execution_mode = True
+                self.scheduler.pending_long_request_sync_id = busy_engines[self.dp_rank][0]
+                self.scheduler.long_request_engines = busy_engines[self.dp_rank][1]
+        
+    def _sync_long_request_across_dp_ranks(self, 
+                                           sync_long_request: str, 
+                                           eng_indices: list[int]) \
+                                               -> dict[int, tuple[str, list[int]]]:
+        # sync the sync_long_request string across all DP ranks
+        return ParallelConfig.sync_long_request_across_dp_ranks(self.dp_group, 
+                                                               sync_long_request, 
+                                                               eng_indices)
 
     def reinitialize_distributed(
         self, reconfig_request: ReconfigureDistributedRequest

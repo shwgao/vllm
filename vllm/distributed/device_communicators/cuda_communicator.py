@@ -80,6 +80,7 @@ class CudaCommunicator(DeviceCommunicatorBase):
                 symm_mem_enabled=(
                     self.symm_mem_comm is not None and not self.symm_mem_comm.disabled
                 ),
+                unique_name=unique_name,
             )
 
             if current_platform.is_rocm():

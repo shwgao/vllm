@@ -395,3 +395,9 @@ class KVCacheConfig:
     see `_get_kv_cache_config_uniform_page_size` for more details.
     """
     kv_cache_groups: list[KVCacheGroupSpec]
+    
+    # We need this to record the status of the KV cache spec for DTP group
+    # avoid change the status of KV cache spec multiple times
+    # This will happen when TP is 1, the gpu_runner will share the same KV
+    # cache spec with the engine core process. 
+    change_status_for_dtp: bool = False

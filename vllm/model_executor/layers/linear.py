@@ -15,7 +15,12 @@ from vllm.distributed import (
     split_tensor_along_last_dim,
     tensor_model_parallel_all_gather,
     tensor_model_parallel_all_reduce,
+    get_dtp_group_state, 
+    get_dp_group,
+    get_tp_group,
+    dynamic_tensor_model_parallel_all_reduce,
 )
+from contextlib import contextmanager
 from vllm.logger import init_logger
 from vllm.model_executor.custom_op import CustomOp
 from vllm.model_executor.layers.quantization.base_config import (
@@ -285,12 +290,116 @@ class LinearBase(CustomOp):
         self.disable_tp = disable_tp
         self.tp_rank = get_tensor_model_parallel_rank() if not disable_tp else 0
         self.tp_size = get_tensor_model_parallel_world_size() if not disable_tp else 1
+        
+        self.shard_status = False
+        self.old_weight = None
+        self.long_request_engine_ids = (0, 1)
 
     def update_param_tp_status(self):
         for param in self.parameters():
             if isinstance(param, BasevLLMParameter):
                 param.tp_rank = self.tp_rank
                 param.tp_size = self.tp_size
+                
+    @contextmanager
+    def resharding(self,):
+        """
+        Reshard the weight matrix if the DTP group is used.
+        If the DTP group is not used, do nothing.
+        When outside the context, the weight matrix is not resharded.
+        The shape of the model weight matrix is (input_size, output_size).
+        For ColumnParallelLinear and RowParallelLinear, the weight matrix is 
+        sharded along different dimensions.
+        """
+        if not get_dtp_group_state():
+            if self.shard_status:
+                self.weight = self.old_weight
+                self.shard_status = False
+                self.old_weight = None
+            yield
+            return
+        
+        if self.shard_status:
+            yield
+            return
+
+        self.shard_status = True
+        dtp_size = len(self.long_request_engine_ids)
+        dp_rank = get_dp_group().rank_in_group
+        dp_index = self.long_request_engine_ids.index(dp_rank)
+        self.old_weight = self.weight
+        
+        # original weight shape: [6144, 4096], and the first dimension 6144 is 
+        # composed of Q, K, V: [4096, 1024, 1024].
+        # now we want to pick corresponding shard of Q, K, V for each rank
+        # for example, if the dtp_size is 2, then the rank 0 will pick the first 
+        # partition of Q, K, V [0:2048, 0:512, 0:512], and the rank 1 will pick 
+        # the second partition of Q, K, V [2048:4096, 512:1024, 512:1024]
+        
+        if isinstance(self, ColumnParallelLinear):
+            original_partition = self.output_partition_sizes # [4096, 1024, 1024]
+            shard_partition_sizes = [divide(partition_size, dtp_size) for partition_size in original_partition]
+
+            # Calculate the start and end indices for each partition (Q, K, V)
+            partition_offsets = [0]
+            for size in original_partition:
+                partition_offsets.append(partition_offsets[-1] + size)
+            
+            # Calculate shard indices for each partition
+            shard_start_indices = []
+            shard_end_indices = []
+            for i, (offset, partition_size) in enumerate(zip(partition_offsets[:-1], original_partition)):
+                shard_start = offset + dp_index * shard_partition_sizes[i]
+                shard_end = offset + (dp_index + 1) * shard_partition_sizes[i]
+                shard_start_indices.append(shard_start)
+                shard_end_indices.append(shard_end)
+            
+            # Create the sharded weight by concatenating the shards from each partition
+            sharded_weights = []
+            for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
+                sharded_weights.append(self.old_weight[start_idx:end_idx, :])
+            
+            # Concatenate all sharded weights along the first dimension
+            new_weight = torch.cat(sharded_weights, dim=0)
+        
+            self.weight = Parameter(new_weight)
+            
+            output_weight = False
+            if output_weight:
+                # write weight to file csv
+                tp_rank = get_tp_group().rank_in_group
+                # Use more descriptive filename to avoid conflicts
+                weight_file = f"linear_weight_tp{tp_rank}_{id(self)}.csv"
+                
+                # Convert to float32 first to handle BFloat16 and other unsupported types
+                weight_cpu = self.weight.data.cpu().float().numpy()  # Move to CPU and convert to float32
+                
+                # Use numpy.savetxt for better performance and proper CSV format
+                import numpy as np
+                np.savetxt(weight_file, weight_cpu, delimiter=',', fmt='%.6f')
+                logger.info(f"Weight saved to {weight_file}, shape: {weight_cpu.shape}")
+        
+        # elif isinstance(self, ColumnParallelLinear):
+        #     original_partition = self.output_size_per_partition # [4096, 1024, 1024]
+        #     shard_partition_size = divide(original_partition, dtp_size)
+        #     shard_start = dp_index * shard_partition_size
+        #     shard_end = (dp_index + 1) * shard_partition_size
+        #     self.weight = Parameter(self.old_weight[shard_start:shard_end, :])
+            
+        elif isinstance(self, RowParallelLinear):
+            # For RowParallelLinear, we need to shard along the second dimension
+            original_partition = self.input_size_per_partition # [4096, 1024, 1024]
+            shard_size = divide(original_partition, dtp_size)
+            shard_start = dp_index * shard_size
+            shard_end = (dp_index + 1) * shard_size
+            self.weight = Parameter(self.old_weight[:, shard_start:shard_end])
+        else:
+            raise ValueError(f"Unimplemented DTP layer type: {type(self)}")
+
+        try:
+            yield
+        finally:
+            pass
 
 
 @CustomOp.register("replicated_linear")
@@ -562,7 +671,8 @@ class ColumnParallelLinear(LinearBase):
 
         # Matrix multiply.
         assert self.quant_method is not None
-        output_parallel = self.quant_method.apply(self, input_, bias)
+        with self.resharding():
+            output_parallel = self.quant_method.apply(self, input_, bias)
 
         if self.gather_output and self.tp_size > 1:
             # All-gather across the partitions.
@@ -1402,10 +1512,14 @@ class RowParallelLinear(LinearBase):
         # Only fuse bias add into GEMM for rank 0 (this ensures that
         # bias will not get added more than once in TP>1 case)
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
-        output_parallel = self.quant_method.apply(self, input_parallel, bias_)
+        with self.resharding():
+            output_parallel = self.quant_method.apply(self, input_parallel, bias_)
 
         if self.reduce_results and self.tp_size > 1:
-            output = tensor_model_parallel_all_reduce(output_parallel)
+            if get_dtp_group_state():
+                output = dynamic_tensor_model_parallel_all_reduce(output_parallel, group_name=self.long_request_engine_ids)
+            else:
+                output = tensor_model_parallel_all_reduce(output_parallel)
         else:
             output = output_parallel
 

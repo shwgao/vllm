@@ -69,6 +69,8 @@ from .utils import (
     maybe_prefix,
 )
 
+from vllm.distributed import get_dtp_group_world_size, get_dtp_group_state
+from contextlib import contextmanager
 
 class LlamaMLP(nn.Module):
     def __init__(
@@ -326,25 +328,107 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
+        
+        self.dtp_context_switch_status = False
+        self.original_status = {}
+        
+    @contextmanager
+    def dtp_context(self, long_request_engine_ids: tuple[int, ...]):
+        """Temporarily switch to DTP context.
+
+        - Delegates head/size adjustments to `self.self_attn.dtp_context()`.
+        - Locally overrides `tp_size` for RowParallelLinear modules and restores
+          them safely with try/finally.
+        """
+        if not get_dtp_group_state():
+            if self.dtp_context_switch_status:
+                self.self_attn.o_proj.tp_size = self.original_status["o_proj_tp_size"]
+                self.mlp.down_proj.tp_size = self.original_status["down_proj_tp_size"]
+                
+                self.self_attn.attn.num_heads = self.original_status["num_heads"]
+                self.self_attn.attn.num_kv_heads = self.original_status["num_kv_heads"]
+                
+                self.self_attn.q_size = self.original_status["q_size"]
+                self.self_attn.kv_size = self.original_status["kv_size"]
+                
+                self.self_attn.attn.kv_cache[0] = self.self_attn.attn.kv_cache[0].view(self.self_attn.attn.kv_cache[0].shape[0], 
+                                                self.self_attn.attn.kv_cache[0].shape[1], 
+                                                self.original_status["original_block_size"], self.original_status["original_kv_head_num"], 
+                                                self.self_attn.attn.kv_cache[0].shape[4])
+                self.dtp_context_switch_status = False
+                self.original_status["o_proj_tp_size"] = None
+                self.original_status["down_proj_tp_size"] = None
+                self.original_status["num_heads"] = None
+                self.original_status["num_kv_heads"] = None
+                self.original_status["q_size"] = None
+                self.original_status["kv_size"] = None
+                self.original_status["original_block_size"] = None
+                self.original_status["original_kv_head_num"] = None
+            yield
+            return
+
+        if self.dtp_context_switch_status:
+            yield
+            return
+    
+        self.dtp_context_switch_status = True
+        self.original_status["o_proj_tp_size"] = self.self_attn.o_proj.tp_size
+        self.original_status["down_proj_tp_size"] = self.mlp.down_proj.tp_size
+        
+        self.original_status["num_heads"] = self.self_attn.num_heads
+        self.original_status["num_kv_heads"] = self.self_attn.num_kv_heads
+        
+        self.original_status["q_size"] = self.self_attn.q_size
+        self.original_status["kv_size"] = self.self_attn.kv_size
+        
+        self.original_status["original_block_size"] = self.self_attn.attn.kv_cache[0].shape[2]
+        self.original_status["original_kv_head_num"] = self.self_attn.attn.kv_cache[0].shape[3]
+        
+        try:
+            dtp_size = len(long_request_engine_ids)
+            self.self_attn.o_proj.tp_size *= dtp_size
+            self.mlp.down_proj.tp_size *= dtp_size
+            
+            self.self_attn.qkv_proj.long_request_engine_ids = long_request_engine_ids
+            self.self_attn.o_proj.long_request_engine_ids = long_request_engine_ids
+            self.mlp.gate_up_proj.long_request_engine_ids = long_request_engine_ids
+            self.mlp.down_proj.long_request_engine_ids = long_request_engine_ids
+            
+            self.self_attn.attn.num_heads = self.self_attn.num_heads // dtp_size
+            self.self_attn.attn.num_kv_heads = self.self_attn.num_kv_heads // dtp_size
+            
+            self.self_attn.q_size = self.self_attn.q_size // dtp_size
+            self.self_attn.kv_size = self.self_attn.kv_size // dtp_size
+            
+            self.self_attn.attn.kv_cache[0] = self.self_attn.attn.kv_cache[0].view(self.self_attn.attn.kv_cache[0].shape[0], 
+                                              self.self_attn.attn.kv_cache[0].shape[1], 
+                                              self.original_status["original_block_size"] * dtp_size, 
+                                              self.original_status["original_kv_head_num"] // dtp_size, 
+                                              self.self_attn.attn.kv_cache[0].shape[4])
+            yield
+        finally:
+            pass
 
     def forward(
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: torch.Tensor | None,
+        long_request_engine_ids: tuple[int, ...],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        hidden_states = self.self_attn(positions=positions, hidden_states=hidden_states)
+        with self.dtp_context(long_request_engine_ids):
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            hidden_states = self.self_attn(positions=positions, hidden_states=hidden_states)
 
-        # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
-        return hidden_states, residual
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+            return hidden_states, residual
 
     def get_quant_config(self, vllm_config: VllmConfig) -> QuantizationConfig | None:
         """Get quantization config for this layer. Override in subclasses."""
@@ -401,6 +485,7 @@ class LlamaModel(nn.Module):
         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
             ["hidden_states", "residual"], config.hidden_size
         )
+        self.long_request_engine_ids = (0, 1)
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -429,7 +514,8 @@ class LlamaModel(nn.Module):
         ):
             if idx in self.aux_hidden_state_layers:
                 aux_hidden_states.append(hidden_states + residual)
-            hidden_states, residual = layer(positions, hidden_states, residual)
+            hidden_states, residual = layer(positions, hidden_states, residual,
+                                            self.long_request_engine_ids)
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors(
@@ -597,6 +683,8 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP, SupportsEagle3):
         self.make_empty_intermediate_tensors = (
             self.model.make_empty_intermediate_tensors
         )
+        
+        self.long_request_engine_ids = (0, 1)
 
     def set_aux_hidden_state_layers(self, layers: tuple[int, ...]) -> None:
         self.model.aux_hidden_state_layers = layers

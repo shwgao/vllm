@@ -44,6 +44,9 @@ class Request:
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
+        is_long_request: bool = False,
+        long_request_sync_id: Optional[str] = None,
+        long_request_engines: Optional[list[int]] = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -126,6 +129,11 @@ class Request:
         if block_hasher is not None:
             self.get_hash_new_full_blocks = partial(block_hasher, self)
             self.block_hashes = self.get_hash_new_full_blocks()
+        
+        # Long request synchronization
+        self.is_long_request: bool = is_long_request
+        self.long_request_sync_id: Optional[str] = long_request_sync_id
+        self.long_request_engines: Optional[list[int]] = long_request_engines
 
     @classmethod
     def from_engine_core_request(
@@ -148,6 +156,9 @@ class Request:
             priority=request.priority,
             trace_headers=request.trace_headers,
             block_hasher=block_hasher,
+            is_long_request=request.is_long_request,
+            long_request_sync_id=request.request_id,
+            long_request_engines=request.long_request_engines,
         )
 
     def append_output_token_ids(

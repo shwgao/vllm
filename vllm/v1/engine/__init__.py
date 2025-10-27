@@ -70,6 +70,15 @@ class EngineCoreRequest(
     priority: int = 0
 
     trace_headers: Mapping[str, str] | None = None
+    
+        # Used for long request synchronization across DP engines
+    is_long_request: bool = False
+    long_request_sync_id: str | None = None
+    
+    # Used for DTP case to indicate if the request a long request that needs
+    # more than one engine to finish
+    long_request_engine_num: int = 1
+    long_request_engines: list[int] = []
 
 
 class EngineCoreEventType(enum.IntEnum):
@@ -171,6 +180,9 @@ class EngineCoreOutputs(
     # In DP case, used to signal that a request was received for an
     # "old" wave, so the next wave needs to be started in other engines.
     start_wave: int | None = None
+    
+    # Whether to switch the DTP group state
+    switch_dtp_group_state: bool = False
 
     def __post_init__(self):
         if self.timestamp == 0.0:

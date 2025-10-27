@@ -396,6 +396,17 @@ class ParallelConfig:
         # on global rank
         torch.distributed.all_reduce(tensor, op=ReduceOp.MIN, group=dp_group)
         return tensor.item()
+    
+    @staticmethod
+    def sync_long_request_across_dp_ranks(dp_group: "ProcessGroup",
+                                          sync_long_request: str,
+                                          eng_indices: list[int]):
+        gathered_objects = [None] * dp_group.size()
+        torch.distributed.all_gather_object(gathered_objects, 
+                                            {dp_group.rank():(sync_long_request, 
+                                                              eng_indices)}, 
+                                            group=dp_group)
+        return gathered_objects
 
     def compute_hash(self):
         """
