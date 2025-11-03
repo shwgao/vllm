@@ -65,20 +65,6 @@ NO_PROXY=localhost,127.0.0.1,0.0.0.0
 source .env && vllm bench serve --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --host 0.0.0.0 --port 8000 --random-input-len 32 --random-output-len 4 --num-prompts 5
 ```
 
-## 验证解决方案
-
-成功运行后应该看到类似输出：
-```
-============ Serving Benchmark Result ============
-Successful requests:                     5         
-Failed requests:                         0         
-Request throughput (req/s):              12.65     
-Output token throughput (tok/s):         50.60     
-Mean TTFT (ms):                          217.50    
-Mean TPOT (ms):                          58.09     
-==================================================
-```
-
 ## 推荐使用方法1
 
 **方法1（no_proxy 环境变量）**是最优雅的解决方案，因为：

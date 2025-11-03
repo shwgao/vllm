@@ -20,6 +20,8 @@ from vllm.distributed import (
     get_ep_group,
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
+    get_dtp_group_state,
+    dynamic_tensor_model_parallel_all_reduce
 )
 from vllm.distributed.eplb.eplb_state import EplbState
 from vllm.forward_context import ForwardContext, get_forward_context
@@ -1081,6 +1083,7 @@ class FusedMoE(CustomOp):
         zero_expert_type: str | None = None,
         expert_mapping: list[tuple[str, str, int, str]] | None = None,
         n_shared_experts: int | None = None,
+        long_request_engine_ids: tuple[int, ...] = (0, 1),
     ):
         super().__init__()
 
@@ -1339,6 +1342,8 @@ class FusedMoE(CustomOp):
             self.batched_router_logits = torch.zeros(
                 logits_shape, dtype=moe.in_dtype, device=torch.cuda.current_device()
             )
+            
+        self.long_request_engine_ids = long_request_engine_ids
 
     @property
     def shared_experts(self) -> torch.nn.Module | None:
@@ -2135,7 +2140,13 @@ class FusedMoE(CustomOp):
         if self.must_reduce_shared_expert_outputs():
             return final_hidden_states
         else:
-            return tensor_model_parallel_all_reduce(final_hidden_states)
+            if get_dtp_group_state():
+                return dynamic_tensor_model_parallel_all_reduce(
+                    final_hidden_states,
+                    group_name=self.long_request_engine_ids
+                    )
+            else:
+                return tensor_model_parallel_all_reduce(final_hidden_states)
 
     def forward_native(
         self,
@@ -2389,7 +2400,8 @@ class FusedMoE(CustomOp):
             )
 
         do_naive_dispatch_combine: bool = (
-            self.dp_size > 1 and not self.quant_method.using_modular_kernel
+            self.dp_size > 1 and not self.quant_method.using_modular_kernel \
+                and not get_dtp_group_state()
         )
 
         # If there are shared experts but we are not using a modular kernel, the

@@ -17,6 +17,8 @@ from vllm.distributed import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_gather,
+    get_dtp_group_state,
+    get_dtp_group,
 )
 from vllm.model_executor.layers.fused_moe import FusedMoE
 from vllm.model_executor.layers.fused_moe.config import FusedMoEParallelConfig
@@ -44,6 +46,10 @@ from .utils import (
     make_layers,
     maybe_prefix,
 )
+
+from contextlib import contextmanager
+
+from torch.nn import Parameter
 
 
 class OAIAttention(nn.Module):
@@ -204,25 +210,127 @@ class TransformerBlock(torch.nn.Module):
         self.mlp = MLPBlock(vllm_config, self.layer_idx, prefix=f"{prefix}.mlp")
         self.input_layernorm = RMSNorm(config.hidden_size, eps=1e-5)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=1e-5)
+        
+        self.dtp_context_switch_status = False
+        self.original_status = {}
+    
+    @contextmanager
+    def dtp_context(self, long_request_engine_ids: tuple[int, ...]):
+        """Temporarily switch to DTP context.
+
+        - Delegates head/size adjustments to `self.self_attn.dtp_context()`.
+        - Locally overrides `tp_size` for RowParallelLinear modules and restores
+          them safely with try/finally.
+        """
+        if not get_dtp_group_state():
+            if self.dtp_context_switch_status:
+                self.attn.o_proj.tp_size = self.original_status["o_proj_tp_size"]
+                self.attn.o_proj.tp_rank = self.original_status["o_proj_tp_rank"]
+                
+                self.attn.attn.num_heads = self.original_status["num_attention_heads"]
+                self.attn.attn.num_kv_heads = self.original_status["num_key_value_heads"]
+                
+                self.attn.q_size = self.original_status["q_size"]
+                self.attn.kv_size = self.original_status["kv_size"]
+                
+                self.attn.attn.kv_cache[0] = self.attn.attn.kv_cache[0].view(self.attn.attn.kv_cache[0].shape[0], 
+                                                self.attn.attn.kv_cache[0].shape[1], 
+                                                self.original_status["original_block_size"], self.original_status["original_kv_head_num"], 
+                                                self.attn.attn.kv_cache[0].shape[4])
+                
+                # sinks are also sharded
+                if "sinks" in self.original_status:
+                    self.attn.attn.impl.sinks = self.original_status["sinks"]
+                
+                self.dtp_context_switch_status = False
+                self.original_status["o_proj_tp_size"] = None
+                self.original_status["o_proj_tp_rank"] = None
+                self.original_status["num_attention_heads"] = None
+                self.original_status["num_key_value_heads"] = None
+                self.original_status["q_size"] = None
+                self.original_status["kv_size"] = None
+                self.original_status["original_block_size"] = None
+                self.original_status["original_kv_head_num"] = None
+                self.original_status["sinks"] = None
+            yield
+            return
+
+        if self.dtp_context_switch_status:
+            yield
+            return
+    
+        self.dtp_context_switch_status = True
+        self.original_status["o_proj_tp_size"] = self.attn.o_proj.tp_size
+        
+        self.original_status["num_attention_heads"] = self.attn.num_attention_heads
+        self.original_status["num_key_value_heads"] = self.attn.num_key_value_heads
+        self.original_status["q_size"] = self.attn.q_size
+        self.original_status["kv_size"] = self.attn.kv_size
+        self.original_status["original_block_size"] = self.attn.attn.kv_cache[0].shape[2]
+        self.original_status["original_kv_head_num"] = self.attn.attn.kv_cache[0].shape[3]
+        self.original_status["o_proj_tp_rank"] = self.attn.o_proj.tp_rank
+        
+        # sinks are also sharded
+        if self.attn.sinks is not None:
+            self.original_status["sinks"] = self.attn.sinks
+        
+        try:
+            dp_rank = get_dp_group().rank_in_group
+            dp_index = long_request_engine_ids.index(dp_rank)
+            
+            dtp_size = len(long_request_engine_ids)
+            self.attn.o_proj.tp_size *= dtp_size
+
+            self.attn.qkv.long_request_engine_ids = long_request_engine_ids
+            self.attn.o_proj.long_request_engine_ids = long_request_engine_ids
+            
+            self.mlp.experts.long_request_engine_ids = long_request_engine_ids
+            
+            # when adding bias, we need to make sure only rank0 adds bias, so
+            # we need to set the tp_rank
+            tp_rank = get_dtp_group(long_request_engine_ids).rank_in_group
+            self.attn.o_proj.tp_rank = tp_rank
+            
+            self.attn.attn.num_heads = self.attn.num_attention_heads // dtp_size
+            self.attn.attn.num_kv_heads = self.attn.num_key_value_heads // dtp_size
+            
+            self.attn.q_size = self.attn.q_size // dtp_size
+            self.attn.kv_size = self.attn.kv_size // dtp_size
+            
+            self.attn.attn.kv_cache[0] = self.attn.attn.kv_cache[0].view(self.attn.attn.kv_cache[0].shape[0], 
+                                              self.attn.attn.kv_cache[0].shape[1], 
+                                              self.original_status["original_block_size"] * dtp_size, 
+                                              self.original_status["original_kv_head_num"] // dtp_size, 
+                                              self.attn.attn.kv_cache[0].shape[4])
+            
+            # sinks are also sharded
+            if self.attn.sinks is not None:
+                size_per_rank = self.original_status["sinks"].shape[0] // dtp_size
+                self.attn.attn.impl.sinks = Parameter(self.attn.sinks[dp_index * size_per_rank:(dp_index + 1) * size_per_rank])
+            yield
+        finally:
+            pass
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         positions: torch.Tensor,
         residual: torch.Tensor | None,
+        long_request_engine_ids: tuple[int, ...],
     ) -> torch.Tensor:
         # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        hidden_states = self.attn(hidden_states, positions)
+        with self.dtp_context(long_request_engine_ids):
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            hidden_states = self.attn(hidden_states, positions)
 
-        # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        output = self.mlp(hidden_states)
-        return output, residual
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+            output = self.mlp(hidden_states)
+            return output, residual
 
 
 @support_torch_compile
@@ -254,6 +362,8 @@ class GptOssModel(nn.Module):
             ["hidden_states", "residual"], self.config.hidden_size
         )
         self.aux_hidden_state_layers = tuple[int, ...]()
+        
+        self.long_request_engine_ids = (0, 1)
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embedding(input_ids)
@@ -282,7 +392,7 @@ class GptOssModel(nn.Module):
             layer = self.layers[i]
             if i in self.aux_hidden_state_layers:
                 aux_hidden_states.append(x if residual is None else x + residual)
-            x, residual = layer(x, positions, residual)
+            x, residual = layer(x, positions, residual, self.long_request_engine_ids)
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({"hidden_states": x, "residual": residual})
         x, _ = self.norm(x, residual)

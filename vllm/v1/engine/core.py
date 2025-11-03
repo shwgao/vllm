@@ -335,6 +335,15 @@ class EngineCore:
 
         scheduler_output = self.scheduler.schedule()
         
+        try:
+            logger.info(f"dp rank {self.dp_rank} cached request: {scheduler_output.scheduled_cached_reqs.req_ids}")
+        except Exception as e:
+            pass
+        try:
+            logger.info(f"dp rank {self.dp_rank} new scheduled request: {scheduler_output.scheduled_new_reqs[0].request_id}")
+        except Exception as e:
+            pass
+        
         if scheduler_output.switch_dtp_group_state:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
             self.collective_rpc("worker_set_dtp_group_state", args=(True,))
@@ -1196,13 +1205,13 @@ class DPEngineCoreProc(EngineCoreProc):
                 # if the model didn't execute any ready requests.
                 self.execute_dummy_batch()
             
-            # 2.5) Check if long request will be executed next step and
-            self._syn_long_request()
 
             # 3) All-reduce operation to determine global unfinished reqs.
             self.engines_running = self._has_global_unfinished_reqs(
                 local_unfinished_reqs
             )
+            # 2.5) Check if long request will be executed next step and
+            self._syn_long_request()
 
             if not self.engines_running:
                 if self.dp_rank == 0 or not self.has_coordinator:

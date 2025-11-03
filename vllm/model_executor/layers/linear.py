@@ -316,6 +316,7 @@ class LinearBase(CustomOp):
                 self.weight = self.old_weight
                 self.shard_status = False
                 self.old_weight = None
+                self.bias = self.old_bias
             yield
             return
         
@@ -328,6 +329,7 @@ class LinearBase(CustomOp):
         dp_rank = get_dp_group().rank_in_group
         dp_index = self.long_request_engine_ids.index(dp_rank)
         self.old_weight = self.weight
+        self.old_bias = self.bias
         
         # original weight shape: [6144, 4096], and the first dimension 6144 is 
         # composed of Q, K, V: [4096, 1024, 1024].
@@ -356,13 +358,21 @@ class LinearBase(CustomOp):
             
             # Create the sharded weight by concatenating the shards from each partition
             sharded_weights = []
+            sharded_biases = []
             for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
                 sharded_weights.append(self.old_weight[start_idx:end_idx, :])
+                if not self.skip_bias_add:
+                    sharded_biases.append(self.old_bias[start_idx:end_idx])
             
             # Concatenate all sharded weights along the first dimension
             new_weight = torch.cat(sharded_weights, dim=0)
         
             self.weight = Parameter(new_weight)
+            
+            # bias is also sharded
+            if not self.skip_bias_add:
+                new_bias = torch.cat(sharded_biases, dim=0)
+                self.bias = Parameter(new_bias)
             
             output_weight = False
             if output_weight:
@@ -667,11 +677,11 @@ class ColumnParallelLinear(LinearBase):
         self,
         input_,
     ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
-        bias = self.bias if not self.skip_bias_add else None
 
         # Matrix multiply.
         assert self.quant_method is not None
         with self.resharding():
+            bias = self.bias if not self.skip_bias_add else None
             output_parallel = self.quant_method.apply(self, input_, bias)
 
         if self.gather_output and self.tp_size > 1:

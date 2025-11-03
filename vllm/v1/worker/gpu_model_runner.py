@@ -2431,22 +2431,23 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             if self.dtp_context_switch_status:
                 self.dtp_context_switch_status = False
                 dtp_size = len(self.long_request_engine_ids)
-                for kv_cache_group_id, kv_cache_group_spec in enumerate(
-                    self.kv_cache_config.kv_cache_groups):
-                    if self.kv_cache_config.change_status_for_dtp:
-                        current_spec = kv_cache_group_spec.kv_cache_spec
-                        new_spec = replace(current_spec,
-                                           block_size=current_spec.block_size // dtp_size,
-                                           num_kv_heads=current_spec.num_kv_heads * dtp_size)
-                        kv_cache_group_spec.kv_cache_spec = new_spec
-                        # Get metadata builder from attn_groups instead of attn_metadata_builders
-                        if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
-                            attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
-                            builder = attn_group.get_metadata_builder()
-                            builder.block_size //= dtp_size
-                            builder.num_heads_kv *= dtp_size
-                        self.kv_cache_config.change_status_for_dtp = False
-                self.input_batch.block_table.block_tables[0].block_size //= dtp_size
+                if self.kv_cache_config.change_status_for_dtp:
+                    for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                        self.kv_cache_config.kv_cache_groups):
+                            current_spec = kv_cache_group_spec.kv_cache_spec
+                            new_spec = replace(current_spec,
+                                            block_size=current_spec.block_size // dtp_size,
+                                            num_kv_heads=current_spec.num_kv_heads * dtp_size)
+                            kv_cache_group_spec.kv_cache_spec = new_spec
+                            # Get metadata builder from attn_groups instead of attn_metadata_builders
+                            if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
+                                attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
+                                builder = attn_group.get_metadata_builder()
+                                builder.block_size //= dtp_size
+                                builder.num_heads_kv *= dtp_size
+                                
+                            self.input_batch.block_table.block_tables[kv_cache_group_id].block_size //= dtp_size
+                    self.kv_cache_config.change_status_for_dtp = False
                 
                 self.original_status = {}
                 self.long_request_engine_ids = [0, 1]
@@ -2468,22 +2469,23 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # new:[2, block_num, block_size*dtp_size, kv_head_num/dtp_size, kv_head_size]
         dtp_size = len(self.long_request_engine_ids)
         self.original_status["dtp_size"] = dtp_size
-        self.input_batch.block_table.block_tables[0].block_size *= dtp_size
-        for kv_cache_group_id, kv_cache_group_spec in enumerate(
-                self.kv_cache_config.kv_cache_groups):
-            if not self.kv_cache_config.change_status_for_dtp:
-                current_spec = kv_cache_group_spec.kv_cache_spec
-                new_spec = replace(current_spec,
-                                   block_size=current_spec.block_size * dtp_size,
-                                   num_kv_heads=current_spec.num_kv_heads // dtp_size)
-                kv_cache_group_spec.kv_cache_spec = new_spec
-                # Get metadata builder from attn_groups instead of attn_metadata_builders
-                if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
-                    attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
-                    builder = attn_group.get_metadata_builder()
-                    builder.block_size *= dtp_size
-                    builder.num_heads_kv //= dtp_size
-                self.kv_cache_config.change_status_for_dtp = True
+        
+        if not self.kv_cache_config.change_status_for_dtp:
+            for kv_cache_group_id, kv_cache_group_spec in enumerate(
+                    self.kv_cache_config.kv_cache_groups):
+                    current_spec = kv_cache_group_spec.kv_cache_spec
+                    new_spec = replace(current_spec,
+                                    block_size=current_spec.block_size * dtp_size,
+                                    num_kv_heads=current_spec.num_kv_heads // dtp_size)
+                    kv_cache_group_spec.kv_cache_spec = new_spec
+                    # Get metadata builder from attn_groups instead of attn_metadata_builders
+                    if kv_cache_group_id < len(self.attn_groups) and self.attn_groups[kv_cache_group_id]:
+                        attn_group = self.attn_groups[kv_cache_group_id][0]  # Use first attention group
+                        builder = attn_group.get_metadata_builder()
+                        builder.block_size *= dtp_size
+                        builder.num_heads_kv //= dtp_size
+                    self.input_batch.block_table.block_tables[kv_cache_group_id].block_size *= dtp_size
+            self.kv_cache_config.change_status_for_dtp = True
         
         try:
             yield
