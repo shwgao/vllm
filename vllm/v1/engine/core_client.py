@@ -1134,13 +1134,19 @@ class DPAsyncMPClient(AsyncMPClient):
             run_engine_stats_update_task()
         )
 
-    async def add_request_async_original(self, request: EngineCoreRequest) -> None:
+    async def add_request_async(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
 
         request.current_wave = self.current_wave
         request.client_index = self.client_index
 
-        chosen_engine = self.get_core_engine_for_request(request)
+        chosen_engine = self.get_core_engine_for_request_original(request)
+        engine_indices = []
+        engine_indices.append(self.core_engines.index(chosen_engine))
+        request.long_request_engines = engine_indices
+        request.is_long_request = False
+        request.long_request_engine_num = 1
+        # logger.info(f"chosen_engine: {chosen_engine} for request {request.request_id}")
         to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)
         if not self.engines_running:
             # Notify coordinator that we're sending a request
@@ -1151,7 +1157,7 @@ class DPAsyncMPClient(AsyncMPClient):
 
         self._ensure_output_queue_task()
         
-    async def add_request_async(self, request: EngineCoreRequest) -> None:
+    async def add_request_async_(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
 
         request.current_wave = self.current_wave

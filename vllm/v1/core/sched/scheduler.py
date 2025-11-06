@@ -381,13 +381,15 @@ class Scheduler(SchedulerInterface):
                     if len(self.running) != 0:
                         break
                     if request.request_id != self.pending_long_request_sync_id:
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.add_request(request)
                         continue
                 else:
                     # Shouwei's note: Skip the long request and wait for the coordinator 
                     # to start the execution mode
                     if request.is_long_request:
                         self.waiting.pop_request()
-                        skipped_waiting_requests.prepend_request(request)
+                        skipped_waiting_requests.add_request(request)
                         if self.pending_long_request_sync_id is None:
                             self.pending_long_request_sync_id = request.request_id
                             self.long_request_engines = request.long_request_engines

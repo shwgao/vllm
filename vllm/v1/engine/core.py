@@ -333,16 +333,20 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
 
+        # logger.info(f"dp rank {self.dp_rank} scheduling")
         scheduler_output = self.scheduler.schedule()
         
-        try:
-            logger.info(f"dp rank {self.dp_rank} cached request: {scheduler_output.scheduled_cached_reqs.req_ids}")
-        except Exception as e:
-            pass
-        try:
-            logger.info(f"dp rank {self.dp_rank} new scheduled request: {scheduler_output.scheduled_new_reqs[0].request_id}")
-        except Exception as e:
-            pass
+        # logger.info(f"dp rank {self.dp_rank} scheduler length of running queue: {len(self.scheduler.running)}")
+        # logger.info(f"dp rank {self.dp_rank} scheduler length of waiting queue: {len(self.scheduler.waiting)}")
+        
+        # try:
+        #     logger.info(f"dp rank {self.dp_rank} cached request: {scheduler_output.scheduled_cached_reqs.req_ids}")
+        # except Exception as e:
+        #     logger.info(f"dp rank {self.dp_rank} cached request: None")
+        # try:
+        #     logger.info(f"dp rank {self.dp_rank} new scheduled request: {scheduler_output.scheduled_new_reqs[0].req_id}")
+        # except Exception as e:
+        #     logger.info(f"dp rank {self.dp_rank} new scheduled request: None")
         
         if scheduler_output.switch_dtp_group_state:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
@@ -357,8 +361,6 @@ class EngineCore:
         
         if engine_core_outputs:
             if engine_core_outputs[0].switch_dtp_group_state:
-                # logger.info(f"Engine {self.engine_index} switching DTP group state to False"
-                #             f"at wave index {self.current_wave}")
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
                 self.kv_cache_config_reset(scheduler_output)
         
@@ -888,6 +890,7 @@ class EngineCoreProc(EngineCore):
         if request_type == EngineCoreRequestType.ADD:
             req, request_wave = request
             self.add_request(req, request_wave)
+            # logger.info(f"dp rank {self.dp_rank} request: {req.request_id}")
         elif request_type == EngineCoreRequestType.ABORT:
             self.abort_requests(request)
         elif request_type == EngineCoreRequestType.UTILITY:

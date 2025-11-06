@@ -226,167 +226,6 @@ async def get_request(
         yield request, request_rates[request_index]
 
 
-def _get_current_request_rate_real_world(
-    request_index: int,
-    total_requests: int,
-    peaks: list[dict] | None = None,
-    low_activity_rps: float = 3.0,
-) -> float:
-    """
-    Calculate the current request rate for a real-world workload pattern
-    with multiple peaks and valleys.
-    
-    Args:
-        request_index: Current request index (0-based)
-        total_requests: Total number of requests
-        peaks: List of peak definitions. Each peak is a dict with:
-            - 'start_ratio': Start position (0.0-1.0) relative to total requests
-            - 'end_ratio': End position (0.0-1.0) relative to total requests
-            - 'peak_rps': Peak request rate
-            - 'shape': Optional, 'gaussian' or 'triangular' (default: 'gaussian')
-        low_activity_rps: Request rate during low activity periods
-    """
-    if peaks is None:
-        # Default: three peaks pattern similar to the first image
-        peaks = [
-            {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 50.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 55.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.70, 'end_ratio': 0.85, 'peak_rps': 57.0, 'shape': 'gaussian'},
-        ]
-    
-    progress = request_index / max(total_requests - 1, 1)
-    
-    # Check if we're in a peak period
-    for peak in peaks:
-        start_ratio = peak['start_ratio']
-        end_ratio = peak['end_ratio']
-        peak_rps = peak['peak_rps']
-        shape = peak.get('shape', 'gaussian')
-        
-        if start_ratio <= progress <= end_ratio:
-            # Calculate position within the peak (0.0 to 1.0)
-            peak_progress = (progress - start_ratio) / (end_ratio - start_ratio)
-            
-            if shape == 'gaussian':
-                # Gaussian-like shape: peak at center, smooth falloff
-                # Center the peak at 0.5
-                centered = (peak_progress - 0.5) * 2  # -1 to 1
-                # Gaussian curve: exp(-0.5 * (x/width)^2)
-                # Adjust width to control peak sharpness
-                width = 0.4
-                gaussian_factor = np.exp(-0.5 * (centered / width) ** 2)
-                # Scale from low_activity_rps to peak_rps
-                return low_activity_rps + (peak_rps - low_activity_rps) * gaussian_factor
-            elif shape == 'triangular':
-                # Triangular shape: linear rise to peak, then linear fall
-                if peak_progress <= 0.5:
-                    # Rising phase
-                    return low_activity_rps + (peak_rps - low_activity_rps) * (peak_progress * 2)
-                else:
-                    # Falling phase
-                    return peak_rps - (peak_rps - low_activity_rps) * ((peak_progress - 0.5) * 2)
-            else:
-                # Default: use peak value
-                return peak_rps
-    
-    # Check if we're past all peaks (should be zero activity)
-    max_end_ratio = max([peak['end_ratio'] for peak in peaks]) if peaks else 0.0
-    if progress > max_end_ratio + 0.1:  # Small buffer before zero activity
-        return 0.0
-    
-    # Low activity period
-    return low_activity_rps
-
-
-async def get_request_real_world(
-    input_requests: list[SampleRequest],
-    burstiness: float = 0.7,
-    peaks: list[dict] | None = None,
-    low_activity_rps: float = 5.0,
-    total_duration_s: float | None = None,
-) -> AsyncGenerator[tuple[SampleRequest, float], None]:
-    """
-    Asynchronously generates requests with a real-world workload pattern
-    featuring multiple peaks and valleys (similar to the first image).
-    
-    Args:
-        input_requests:
-            A list of input requests, each represented as a SampleRequest.
-        burstiness (optional):
-            The burstiness factor of the request generation.
-            Only takes effect when request_rate is not inf.
-            Default value is 1, which follows a Poisson process.
-            Otherwise, the request intervals follow a gamma distribution.
-        peaks (optional):
-            List of peak definitions. Each peak is a dict with:
-            - 'start_ratio': Start position (0.0-1.0) relative to total requests
-            - 'end_ratio': End position (0.0-1.0) relative to total requests  
-            - 'peak_rps': Peak request rate
-            - 'shape': Optional, 'gaussian' or 'triangular' (default: 'gaussian')
-            If None, uses a default three-peak pattern.
-        low_activity_rps (optional):
-            Request rate during low activity periods between peaks.
-            Default is 3.0 req/s.
-        total_duration_s (optional):
-            Total duration in seconds. If None, uses the natural duration
-            based on request rates.
-    """
-    assert burstiness > 0, (
-        f"A positive burstiness factor is expected, but given {burstiness}."
-    )
-    # Convert to list to get length for calculations
-    if isinstance(input_requests, Iterable) and not isinstance(input_requests, list):
-        input_requests = list(input_requests)
-
-    total_requests = len(input_requests)
-    assert total_requests > 0, "No requests provided."
-
-    # Precompute delays among requests to minimize request send laggings
-    request_rates = []
-    delay_ts = []
-    for request_index, request in enumerate(input_requests):
-        current_request_rate = _get_current_request_rate_real_world(
-            request_index,
-            total_requests,
-            peaks,
-            low_activity_rps,
-        )
-        request_rates.append(current_request_rate)
-        if current_request_rate == float("inf") or current_request_rate == 0.0:
-            delay_ts.append(0)
-        else:
-            theta = 1.0 / (current_request_rate * burstiness)
-            # Sample the request interval from the gamma distribution.
-            # If burstiness is 1, it follows exponential distribution.
-            delay_ts.append(np.random.gamma(shape=burstiness, scale=theta))
-
-    # Calculate the cumulative delay time from the first sent out requests.
-    for i in range(1, len(delay_ts)):
-        delay_ts[i] += delay_ts[i - 1]
-    
-    # If total_duration_s is specified, normalize to match it
-    if total_duration_s is not None and delay_ts[-1] != 0:
-        normalize_factor = total_duration_s / delay_ts[-1]
-        delay_ts = [delay * normalize_factor for delay in delay_ts]
-    elif delay_ts[-1] != 0:
-        # Normalize based on average request rate to ensure realistic timing
-        # Calculate weighted average rate
-        avg_rate = np.mean([r for r in request_rates if r > 0])
-        if avg_rate > 0:
-            target_total_delay_s = total_requests / avg_rate
-            normalize_factor = target_total_delay_s / delay_ts[-1]
-            delay_ts = [delay * normalize_factor for delay in delay_ts]
-
-    start_ts = time.time()
-    for request_index, request in enumerate(input_requests):
-        if delay_ts[request_index] > 0:
-            current_ts = time.time()
-            sleep_interval_s = start_ts + delay_ts[request_index] - current_ts
-            if sleep_interval_s > 0:
-                await asyncio.sleep(sleep_interval_s)
-        yield request, request_rates[request_index]
-
-
 def calculate_metrics_for_embeddings(
     outputs: list[RequestFuncOutput], dur_s: float, selected_percentiles: list[float]
 ) -> EmbedBenchmarkMetrics:
@@ -661,7 +500,6 @@ async def benchmark(
     ramp_up_start_rps: int | None = None,
     ramp_up_end_rps: int | None = None,
     ready_check_timeout_sec: int = 600,
-    test_real_world_workload: bool = False,
 ):
     try:
         request_func = ASYNC_REQUEST_FUNCS[endpoint_type]
@@ -830,101 +668,54 @@ async def benchmark(
             }
         )
 
-    if test_real_world_workload:
-        async for request, current_request_rate in get_request_real_world(
-            input_requests,
-        ):
-            if ramp_up_strategy is not None:
-                current_int_rps = int(current_request_rate)
-                if current_int_rps > last_int_rps:
-                    timestamp = datetime.now().isoformat()
-                    for rps_val in range(last_int_rps + 1, current_int_rps + 1):
-                        rps_change_events.append({"rps": rps_val, "timestamp": timestamp})
-                    last_int_rps = current_int_rps
-            prompt, prompt_len, output_len, mm_content, request_id = (
-                request.prompt,
-                request.prompt_len,
-                request.expected_output_len,
-                request.multi_modal_data,
-                request.request_id,
-            )
-            req_model_id, req_model_name = model_id, model_name
-            if lora_modules:
-                req_lora_module = next(lora_modules)
-                req_model_id, req_model_name = req_lora_module, req_lora_module
+    async for request, current_request_rate in get_request(
+        input_requests,
+        request_rate,
+        burstiness,
+        ramp_up_strategy,
+        ramp_up_start_rps,
+        ramp_up_end_rps,
+    ):
+        if ramp_up_strategy is not None:
+            current_int_rps = int(current_request_rate)
+            if current_int_rps > last_int_rps:
+                timestamp = datetime.now().isoformat()
+                for rps_val in range(last_int_rps + 1, current_int_rps + 1):
+                    rps_change_events.append({"rps": rps_val, "timestamp": timestamp})
+                last_int_rps = current_int_rps
+        prompt, prompt_len, output_len, mm_content, request_id = (
+            request.prompt,
+            request.prompt_len,
+            request.expected_output_len,
+            request.multi_modal_data,
+            request.request_id,
+        )
+        req_model_id, req_model_name = model_id, model_name
+        if lora_modules:
+            req_lora_module = next(lora_modules)
+            req_model_id, req_model_name = req_lora_module, req_lora_module
 
-            request_func_input = RequestFuncInput(
-                model=req_model_id,
-                model_name=req_model_name,
-                prompt=prompt,
-                api_url=api_url,
-                prompt_len=prompt_len,
-                output_len=output_len,
-                logprobs=logprobs,
-                multi_modal_content=mm_content,
-                ignore_eos=ignore_eos,
-                extra_headers=extra_headers,
-                extra_body=extra_body,
-                request_id=request_id,
-            )
-            tasks.append(
-                asyncio.create_task(
-                    limited_request_func(
-                        request_func_input=request_func_input, session=session, pbar=pbar
-                    )
+        request_func_input = RequestFuncInput(
+            model=req_model_id,
+            model_name=req_model_name,
+            prompt=prompt,
+            api_url=api_url,
+            prompt_len=prompt_len,
+            output_len=output_len,
+            logprobs=logprobs,
+            multi_modal_content=mm_content,
+            ignore_eos=ignore_eos,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            request_id=request_id,
+        )
+        tasks.append(
+            asyncio.create_task(
+                limited_request_func(
+                    request_func_input=request_func_input, session=session, pbar=pbar
                 )
             )
-    else:
-        async for request, current_request_rate in get_request(
-            input_requests,
-            request_rate,
-            burstiness,
-            ramp_up_strategy,
-            ramp_up_start_rps,
-            ramp_up_end_rps,
-        ):
-            if ramp_up_strategy is not None:
-                current_int_rps = int(current_request_rate)
-                if current_int_rps > last_int_rps:
-                    timestamp = datetime.now().isoformat()
-                    for rps_val in range(last_int_rps + 1, current_int_rps + 1):
-                        rps_change_events.append({"rps": rps_val, "timestamp": timestamp})
-                    last_int_rps = current_int_rps
-            prompt, prompt_len, output_len, mm_content, request_id = (
-                request.prompt,
-                request.prompt_len,
-                request.expected_output_len,
-                request.multi_modal_data,
-                request.request_id,
-            )
-            req_model_id, req_model_name = model_id, model_name
-            if lora_modules:
-                req_lora_module = next(lora_modules)
-                req_model_id, req_model_name = req_lora_module, req_lora_module
-
-            request_func_input = RequestFuncInput(
-                model=req_model_id,
-                model_name=req_model_name,
-                prompt=prompt,
-                api_url=api_url,
-                prompt_len=prompt_len,
-                output_len=output_len,
-                logprobs=logprobs,
-                multi_modal_content=mm_content,
-                ignore_eos=ignore_eos,
-                extra_headers=extra_headers,
-                extra_body=extra_body,
-                request_id=request_id,
-            )
-            tasks.append(
-                asyncio.create_task(
-                    limited_request_func(
-                        request_func_input=request_func_input, session=session, pbar=pbar
-                    )
-                )
-            )
-        
-        
+        )
     outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
 
     if pbar is not None:
@@ -1169,11 +960,6 @@ def save_to_pytorch_benchmark_format(
 
 def add_cli_args(parser: argparse.ArgumentParser):
     add_dataset_parser(parser)
-    parser.add_argument(
-        "--test-real-world-workload",
-        action="store_true",
-        help="Test the real world workload.",
-    )
     parser.add_argument(
         "--label",
         type=str,
@@ -1642,7 +1428,6 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
         ramp_up_start_rps=args.ramp_up_start_rps,
         ramp_up_end_rps=args.ramp_up_end_rps,
         ready_check_timeout_sec=args.ready_check_timeout_sec,
-        test_real_world_workload=args.test_real_world_workload,
     )
 
     # Save config and results to json

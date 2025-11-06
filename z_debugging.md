@@ -1,4 +1,4 @@
-# vLLM Benchmark 代理问题调试指南
+# vLLM Benchmark 代理问题调试
 
 ## 问题描述
 在使用 `vllm bench serve` 命令时，服务一直显示 "Waiting for endpoint to become up" 并无限等待，无法正常进行基准测试。
