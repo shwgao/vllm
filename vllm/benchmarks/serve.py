@@ -249,9 +249,9 @@ def _get_current_request_rate_real_world(
     if peaks is None:
         # Default: three peaks pattern similar to the first image
         peaks = [
-            {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 50.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 55.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.70, 'end_ratio': 0.85, 'peak_rps': 57.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 10.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 15.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.70, 'end_ratio': 0.85, 'peak_rps': 17.0, 'shape': 'gaussian'},
         ]
     
     progress = request_index / max(total_requests - 1, 1)
@@ -302,7 +302,7 @@ async def get_request_real_world(
     input_requests: list[SampleRequest],
     burstiness: float = 0.7,
     peaks: list[dict] | None = None,
-    low_activity_rps: float = 5.0,
+    low_activity_rps: float = 3.0,
     total_duration_s: float | None = None,
 ) -> AsyncGenerator[tuple[SampleRequest, float], None]:
     """
