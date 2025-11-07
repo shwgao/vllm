@@ -20,5 +20,9 @@ vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /ccsopen/
 # /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 # /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
-
+```bash
 Use `module load gnuplot` to plot the metrics.
+
+# salloc to get a GPU on defiant
+salloc -A gen150 -J gpu_job -N 1 -t 02:00:00 -p batch-gpu
+```
