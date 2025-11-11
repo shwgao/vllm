@@ -98,6 +98,8 @@ class EngineCore:
         load_general_plugins()
 
         self.vllm_config = vllm_config
+        self.dp_size = vllm_config.parallel_config.data_parallel_size
+        self.dp_rank = vllm_config.parallel_config.data_parallel_rank
         if is_global_first_rank():
             logger.info(
                 "Initializing a V1 LLM engine (v%s) with config: %s",
@@ -348,6 +350,7 @@ class EngineCore:
         # except Exception as e:
         #     logger.info(f"dp rank {self.dp_rank} new scheduled request: None")
         
+        
         if scheduler_output.switch_dtp_group_state:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
             self.collective_rpc("worker_set_dtp_group_state", args=(True,))
@@ -362,7 +365,9 @@ class EngineCore:
         if engine_core_outputs:
             if engine_core_outputs[0].switch_dtp_group_state:
                 self.collective_rpc("worker_set_dtp_group_state", args=(False,))
-                self.kv_cache_config_reset(scheduler_output)
+                if self.scheduler.set_kv_cache_config_already:
+                    self.kv_cache_config_reset(scheduler_output)
+                    self.scheduler.set_kv_cache_config_already = False
         
         # not all the dtp ranks return the result to the coordinator
         if self.scheduler.long_request_execution_mode:
@@ -890,7 +895,7 @@ class EngineCoreProc(EngineCore):
         if request_type == EngineCoreRequestType.ADD:
             req, request_wave = request
             self.add_request(req, request_wave)
-            # logger.info(f"dp rank {self.dp_rank} request: {req.request_id}")
+            logger.info(f"dp rank {self.dp_rank} request: {req.request_id} added")
         elif request_type == EngineCoreRequestType.ABORT:
             self.abort_requests(request)
         elif request_type == EngineCoreRequestType.UTILITY:
@@ -1210,11 +1215,17 @@ class DPEngineCoreProc(EngineCoreProc):
             
 
             # 3) All-reduce operation to determine global unfinished reqs.
-            self.engines_running = self._has_global_unfinished_reqs(
+            # TODO: sync the want_to_execute_long_request across all the DP ranks here.
+            # self.engines_running = self._has_global_unfinished_reqs(
+            #     local_unfinished_reqs
+            # )
+            self.engines_running = self._has_global_unfinished_reqs_and_switch_mode(
                 local_unfinished_reqs
             )
+            
             # 2.5) Check if long request will be executed next step and
-            self._syn_long_request()
+            # TODO: check which engine should start the long request execution.
+            # self._syn_long_request()
 
             if not self.engines_running:
                 if self.dp_rank == 0 or not self.has_coordinator:
@@ -1244,6 +1255,97 @@ class DPEngineCoreProc(EngineCoreProc):
 
         return ParallelConfig.has_unfinished_dp(self.dp_group, local_unfinished)
     
+    def _has_global_unfinished_reqs_and_switch_mode(self, local_unfinished: bool) -> bool:
+        # Optimization - only perform finish-sync all-reduce every 8 steps.
+        self.step_counter += 1
+        if self.step_counter % 8 != 0:
+            return True
+
+        has_unfinished, tensor = ParallelConfig.has_unfinished_dp_and_switch_mode(
+            self.dp_group,
+            local_unfinished,
+            self.dp_size,
+            self.dp_rank,
+            self.scheduler.pending_long_request_sync_id,
+            self.scheduler.long_request_engines,
+            self.scheduler.want_to_execute_long_request
+        )
+        
+        if tensor is not None:
+            # tensor is a 2D tensor with shape (dp_size, 3+dp_size)
+            # the first column is the has_unfinished
+            # the second column is the want_to_execute_long_request
+            # the third column is the deterministic_hash(sync_long_request)
+            # the rest columns are the engine flags, if the flag is 1, means the engine will
+            # execute the long request
+            has_unfinished = bool(tensor[:, 0].sum().item())
+            want_to_execute_long_request = bool(tensor[:, 1].sum().item())
+            
+            # If any rank wants to execute long request, extract information from tensor
+            if want_to_execute_long_request:
+                # Step 1: Collect all rank requests with their sync_hash and required engine indices
+                rank_requests = {}
+                for rank in range(self.dp_size):
+                    if tensor[rank, 1].item() == 1:  # This rank wants to execute long request
+                        sync_hash = tensor[rank, 2].item()
+                        # Extract engine indices from engine flags (columns 3 to 3+dp_size)
+                        engine_flags = tensor[rank, 3:3+self.dp_size]
+                        eng_indices = [idx for idx in range(self.dp_size) 
+                                     if engine_flags[idx].item() == 1]
+                        
+                        if sync_hash != 0 and eng_indices:
+                            rank_requests[rank] = (sync_hash, eng_indices)
+                
+                # Step 2: Group requests by sync_hash to identify unique requests
+                # For each sync_hash, determine the required engines set and source ranks
+                request_groups = {}
+                for rank, (sync_hash, eng_indices) in rank_requests.items():
+                    if sync_hash not in request_groups:
+                        request_groups[sync_hash] = {
+                            'required_engines': set(),
+                            'source_ranks': set()
+                        }
+                    request_groups[sync_hash]['required_engines'].update(eng_indices)
+                    request_groups[sync_hash]['source_ranks'].add(rank)
+                
+                # Step 3: For each request (sync_hash), check if it can execute
+                # A request can execute if:
+                #   1. required_engines == source_ranks (all required engines are source ranks)
+                #   2. All required engines are not already assigned to another request
+                # This simplifies the logic: if all required engines are source ranks,
+                # they are all ready (since we only collected ranks that want_to_execute)
+                valid_requests = {}  # sync_hash -> eng_indices that can execute
+                busy_engines = set()  # Track engines that are already assigned
+                
+                # Process requests in sorted order (by sync_hash) for deterministic behavior
+                for sync_hash in sorted(request_groups.keys()):
+                    req_info = request_groups[sync_hash]
+                    required_engines = req_info['required_engines']
+                    source_ranks = req_info['source_ranks']
+                    
+                    # Simplified check: required_engines must equal source_ranks
+                    # This means all required engines are source ranks (they all want to execute)
+                    if required_engines == source_ranks:
+                        # Check if any required engine is already assigned to another request
+                        # All required engines are ready and available
+                        eng_indices_list = sorted(required_engines)
+                        valid_requests[sync_hash] = eng_indices_list
+                        busy_engines.update(required_engines)
+                
+                # Step 4: Check if current rank should execute long request
+                if self.scheduler.pending_long_request_sync_id: 
+                    current_sync_hash = ParallelConfig._deterministic_hash(self.scheduler.pending_long_request_sync_id)
+                else:
+                    current_sync_hash = 0
+                
+                if current_sync_hash in valid_requests:
+                    eng_indices = valid_requests[current_sync_hash]
+                    if self.dp_rank in eng_indices:
+                        self.scheduler.long_request_execution_mode = True
+                        self.scheduler.long_request_engines = eng_indices
+        
+        return has_unfinished
+    
     def _syn_long_request(self):
         # Synchronize the long request string across all DP ranks
         long_request_synced = self._sync_long_request_across_dp_ranks(
@@ -1253,10 +1355,9 @@ class DPEngineCoreProc(EngineCoreProc):
         # if one of the DP ranks has the long request synced
         if long_request_synced:
             # Sort the long_request_synced dictionary based on rank
-            # long_request_synced.sort(key=min)
             busy_engines = {}
             for rank, (sync_long_request, eng_indices) in sorted(
-                (kv for d in long_request_synced for kv in d.items()),
+                (kv for d in long_request_synced if d is not None for kv in d.items()),
                 key=lambda x: x[0]
             ):
                 # check if the needed engines are busy or the eng_indices is empty

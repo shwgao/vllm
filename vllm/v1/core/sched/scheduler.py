@@ -186,6 +186,21 @@ class Scheduler(SchedulerInterface):
         # waiting for the coordinator to start the execution mode
         self.long_request_execution_mode: bool = False
         self.switch_dtp_group_state_already: bool = False
+        
+        self.want_to_execute_long_request: bool = False
+        self.last_request_before_switch: Optional[str] = None
+        self.last_request_before_switch_finished: bool = False
+        self.last_request_need_to_switch: Optional[str] = None
+        
+        # parallel dp group are running now. default is self.dp_rank.
+        self.running_parallel_engines: Optional[list[int]] = [self.parallel_config.data_parallel_rank]
+        
+        # switch mode: 
+        # preempt: schedule the long request immediately and preempt the running requests.
+        # sequential: schedule the long request after all the requests before the switch are finished.
+        self.switch_mode: str = 'sequential' # 'sequential'
+        self.track_last_request_need_to_switch: bool = False
+        self.set_kv_cache_config_already: bool = False
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
@@ -207,9 +222,7 @@ class Scheduler(SchedulerInterface):
         # Check if we're in long request execution mode
         switch_dtp_group_state = False
         if self.long_request_execution_mode:
-            switch_dtp_group_state = self._schedule_long_request_exclusive(
-                scheduled_new_reqs
-                )
+            switch_dtp_group_state = self._schedule_long_request_exclusive()
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
@@ -378,21 +391,50 @@ class Scheduler(SchedulerInterface):
                 request = self.waiting.peek_request()
                 
                 if self.long_request_execution_mode:
-                    if len(self.running) != 0:
-                        break
-                    if request.request_id != self.pending_long_request_sync_id:
+                    if request.request_id == self.pending_long_request_sync_id:
+                        self.track_last_request_need_to_switch = True
+                    
+                    if request.long_request_engines != self.long_request_engines:
+                        # logger.info(f"request {request.request_id} is not in the long request engines {self.long_request_engines}")
                         self.waiting.pop_request()
                         skipped_waiting_requests.add_request(request)
+                        
+                        if self.track_last_request_need_to_switch:
+                            self.track_last_request_need_to_switch = False
                         continue
+                    else:
+                        if self.track_last_request_need_to_switch:
+                            self.last_request_need_to_switch = request.request_id
+                            logger.info(f"last request need to switch: {self.last_request_need_to_switch}")
+
                 else:
                     # Shouwei's note: Skip the long request and wait for the coordinator 
                     # to start the execution mode
-                    if request.is_long_request:
+                    if request.long_request_engines != self.running_parallel_engines:
                         self.waiting.pop_request()
                         skipped_waiting_requests.add_request(request)
                         if self.pending_long_request_sync_id is None:
                             self.pending_long_request_sync_id = request.request_id
                             self.long_request_engines = request.long_request_engines
+                        
+                            if len(self.running) > 0:
+                                # record the last request before the switch mode is requested.
+                                if self.last_request_before_switch is None:
+                                    self.last_request_before_switch = self.running[-1].request_id
+                                    self.last_request_before_switch_finished = False
+                            else:
+                                # if there is no running request, it means the last request before the switch mode is finished.
+                                self.last_request_before_switch_finished = True
+                                
+                            # check the switch mode and set the want_to_execute_long_request flag
+                            if self.switch_mode == 'preempt':
+                                self.want_to_execute_long_request = True
+                            elif self.switch_mode == 'sequential':
+                                if self.last_request_before_switch_finished:
+                                    self.want_to_execute_long_request = True
+                            else:
+                                raise ValueError(f"Invalid switch mode: {self.switch_mode}")
+                    
                         continue
 
                 # KVTransfer: skip request if still waiting for remote kvs.
@@ -726,148 +768,32 @@ class Scheduler(SchedulerInterface):
         for i, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
             manager.block_size *= dtp_size
     
-    def _schedule_long_request_exclusive(self, scheduled_new_reqs: list[Request]) -> bool:
+    def _schedule_long_request_exclusive(self) -> bool:
         """Schedule only the long request, preempting all other running requests."""
-        
-        long_request_id = self.pending_long_request_sync_id
-        # logger.info(f"Scheduling long request {long_request_id} exclusively")
-        # Check if the long request is already in the running queue
-        long_request = None
-        is_already_running = False
         switch_dtp_group_state = False
         if not self.switch_dtp_group_state_already:
             switch_dtp_group_state = True
             self.switch_dtp_group_state_already = True
         
-        if self.running and self.running[0].request_id == long_request_id:
-            long_request = self.running[0]
-            is_already_running = True
-        else:
-            # Find the long request in waiting queue
-            for req in self.waiting:
-                if req.request_id == long_request_id:
-                    long_request = req
-                    break
-            
-            if long_request is None:
-                # log
-                logger.error(f"Long request {long_request_id} not found")
-            
-                return self._create_empty_scheduler_output()
-
-            
-            # Preempt all running requests if any
-            if self.running:
-                preempted_reqs = []
-                for req in self.running:
-                    self.kv_cache_manager.free(req)
-                    req.status = RequestStatus.PREEMPTED
-                    req.num_computed_tokens = 0
-                    if self.log_stats:
-                        req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
-                    self.waiting.prepend_request(req)
-                    preempted_reqs.append(req)
-        
-                # Clear running queue
-                self.running.clear()
-            
-            # Add long request to running queue
-            # self.waiting.remove_request(long_request)
-            # self.running.append(long_request)
-            # long_request.status = RequestStatus.RUNNING
-            # scheduled_new_reqs.append(long_request)
+        if self.running and self.running[0].long_request_engines != self.long_request_engines:
+            # enter here means all dp engines are ready to execute the long request and the first
+            # time to schedule the first long request. We need to preempt all the running requests.
+            # TODO: optimize: maybe we has to let these requests finish first and then preempt them.
+            for req in self.running:
+                self.kv_cache_manager.free(req)
+                req.status = RequestStatus.PREEMPTED
+                req.num_computed_tokens = 0
+                req.num_preemptions += 1
+                if self.log_stats:
+                    req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
+                self.waiting.prepend_request(req)
+                
+            self.running.clear()
             
             # Set kv cache config
-            self.kv_cache_config_set()
-                    
-        # # Allocate resources for long request
-        # num_new_tokens = long_request.num_tokens - long_request.num_computed_tokens
-        # num_new_tokens = min(num_new_tokens, self.max_num_scheduled_tokens)
-        # new_blocks = self.kv_cache_manager.allocate_slots(
-        #     long_request, num_new_tokens, num_lookahead_tokens=self.num_lookahead_tokens)
-
-        
-        # if new_blocks is None:
-        #     logger.error(f"Failed to allocate resources for long request {self.pending_long_request_sync_id}")
-        #     # Reset mode and return empty schedule
-        #     self.long_request_execution_mode = False
-        #     self.pending_long_request_sync_id = None
-        #     self.long_request_engines = None
-        #     return self._create_empty_scheduler_output()
-        
-        # # Create scheduler output based on whether request is already running
-        # if is_already_running:
-        #     # Request is already running, use cached data to avoid duplicate addition
-        #     new_reqs_data = []
-        #     cached_reqs_data = CachedRequestData(
-        #         req_ids=[long_request.request_id],
-        #         resumed_from_preemption=[False],
-        #         new_token_ids=[[]],
-        #         resumed_req_token_ids=[None],
-        #         new_block_ids=[new_blocks.get_block_ids()],
-        #         num_computed_tokens=[long_request.num_computed_tokens],
-        #         num_output_tokens=[0],
-        #     )
-        # else:
-        #     # New request, mark as scheduled_new_reqs
-        #     new_reqs_data = [NewRequestData.from_request(long_request, new_blocks.get_block_ids())]
-        #     cached_reqs_data = CachedRequestData(
-        #         req_ids=[],
-        #         resumed_from_preemption=[],
-        #         new_token_ids=[],
-        #         resumed_req_token_ids=[],
-        #         new_block_ids=[],
-        #         num_computed_tokens=[],
-        #         num_output_tokens=[],
-        #     )
-        
-        # scheduler_output = SchedulerOutput(
-        #     scheduled_new_reqs=new_reqs_data,
-        #     scheduled_cached_reqs=cached_reqs_data,
-        #     num_scheduled_tokens={long_request.request_id: num_new_tokens},
-        #     total_num_scheduled_tokens=num_new_tokens,
-        #     scheduled_spec_decode_tokens={},
-        #     scheduled_encoder_inputs={},
-        #     num_common_prefix_blocks=[0] * len(self.kv_cache_config.kv_cache_groups),
-        #     finished_req_ids=self.finished_req_ids,
-        #     free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
-        #     structured_output_request_ids={},
-        #     grammar_bitmask=None,
-        #     pending_long_request_sync_id=None,
-        #     switch_dtp_group_state=switch_dtp_group_state,
-        #     long_request_engine_ids=self.long_request_engines,
-        # )
-        
-        # # NOTE(Kuntai): this function is designed for multiple purposes:
-        # # 1. Plan the KV cache store
-        # # 2. Wrap up all the KV cache load / save ops into an opaque object
-        # # 3. Clear the internal states of the connector
-        # if self.connector is not None:
-        #     meta = self.connector.build_connector_meta(scheduler_output)
-        #     scheduler_output.kv_connector_metadata = meta
-
-        # # collect KV cache events from KV cache manager
-        # events = self.kv_cache_manager.take_events()
-
-        # # collect KV cache events from connector
-        # if self.connector is not None:
-        #     connector_events = self.connector.take_events()
-        #     if connector_events:
-        #         if events is None:
-        #             events = list(connector_events)
-        #         else:
-        #             events.extend(connector_events)
-
-        # # publish collected KV cache events
-        # if events:
-        #     batch = KVEventBatch(ts=time.time(), events=events)
-        #     self.kv_event_publisher.publish(batch)
-        
-        # # Update request state
-        # if long_request.num_cached_tokens < 0:
-        #     long_request.num_cached_tokens = 0
-        
-        # self._update_after_schedule(scheduler_output)
+            if not self.set_kv_cache_config_already:
+                self.kv_cache_config_set()
+                self.set_kv_cache_config_already = True
           
         return switch_dtp_group_state
     
@@ -1319,10 +1245,23 @@ class Scheduler(SchedulerInterface):
                 # outputs this step.
                 engine_core_outputs[0] = eco = EngineCoreOutputs()
             eco.scheduler_stats = stats
+            
+        for req_id in self.finished_req_ids:
+            logger.info(f"dp rank {self.parallel_config.data_parallel_rank} finished request: {req_id}")
+        
+        if self.last_request_before_switch in self.finished_req_ids:
+            self.last_request_before_switch = None
+            self.last_request_before_switch_finished = True
+            if self.switch_mode == 'sequential' and self.last_request_before_switch_finished:
+                self.want_to_execute_long_request = True
+
         
         # Shouwei's note: If the long request is finished, reset the state
-        if self.pending_long_request_sync_id in self.finished_req_ids:
+        if self.last_request_need_to_switch in self.finished_req_ids:
             self.pending_long_request_sync_id = None
+            self.last_request_need_to_switch = None
+            self.running_parallel_engines = [self.parallel_config.data_parallel_rank]
+            self.want_to_execute_long_request = False
             self.switch_dtp_group_state_already = False
             self.long_request_execution_mode = False
             self.long_request_engines = None

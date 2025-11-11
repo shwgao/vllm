@@ -1037,6 +1037,8 @@ class DPAsyncMPClient(AsyncMPClient):
             self._ensure_stats_update_task()
         except RuntimeError:
             pass
+        
+        self.step_count = 0 # for custom work mode(debugging)
 
     def _ensure_stats_update_task(self):
         resources = self.resources
@@ -1133,8 +1135,21 @@ class DPAsyncMPClient(AsyncMPClient):
         resources.stats_update_task = asyncio.create_task(
             run_engine_stats_update_task()
         )
-
+        
     async def add_request_async(self, request: EngineCoreRequest) -> None:
+        work_mode = 'custom'
+        if work_mode == 'original':
+            await self.add_request_async_original(request)
+        elif work_mode == 'traffic_load':
+            await self.add_request_async_based_on_traffic_load(request)
+        elif work_mode == 'request_length':
+            await self.add_request_async_based_on_request_length(request)
+        elif work_mode == 'custom':
+            await self.add_request_async_custom(request)
+        else:
+            raise ValueError(f"Invalid work mode: {work_mode}")
+        
+    async def add_request_async_original(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
 
         request.current_wave = self.current_wave
@@ -1156,8 +1171,78 @@ class DPAsyncMPClient(AsyncMPClient):
         await to_await
 
         self._ensure_output_queue_task()
+
+    async def add_request_async_custom(self, request: EngineCoreRequest) -> None:
+        self._ensure_stats_update_task()
+
+        request.current_wave = self.current_wave
+        request.client_index = self.client_index
+
+        engine_indices_groups = [[0,1],[0,1],[0,1],[0],[0,1]]
+        engine_indices = engine_indices_groups[self.step_count]
+        chosen_engine = [self.core_engines[eng_index] for eng_index in engine_indices]
+        self.step_count += 1
         
-    async def add_request_async_(self, request: EngineCoreRequest) -> None:
+        request.long_request_engines = engine_indices
+        request.is_long_request = False
+        request.long_request_engine_num = len(engine_indices)
+
+        send_tasks = []
+        logger.info(f"chosen_engine: {chosen_engine} for request {request.request_id}")
+        for engine in chosen_engine:
+            send_tasks.append(
+                self._send_input(EngineCoreRequestType.ADD, request, engine)
+            )
+        await asyncio.gather(*send_tasks)
+        
+        if not self.engines_running:
+            # Notify coordinator that we're sending a request
+            # Use the primary engine (chosen engine) for coordinator notification
+            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engine[0]))
+            await self.first_req_send_socket.send(req_msg)
+
+        self._ensure_output_queue_task()
+
+    async def add_request_async_based_on_traffic_load(self, request: EngineCoreRequest) -> None:
+        # In this mode, we will send the request to all the engines, but only the chosen engine
+        # will receive the full request, others will receive empty request. the long_request_engines
+        # is set, so that the each engine will know whether they are involved in the request.
+        self._ensure_stats_update_task()
+
+        request.current_wave = self.current_wave
+        request.client_index = self.client_index
+        
+        chosen_engines = self.get_core_engine_for_request_traffic_load(request)
+        engine_indices = []
+        for engine in chosen_engines:
+            engine_indices.append(self.core_engines.index(engine))
+        
+        logger.info(f"chosen_engines: {chosen_engines} for request {request.request_id}")
+        # Set long_request_engines to indicate which engine is involved
+        request.long_request_engines = engine_indices
+        request.is_long_request = len(chosen_engines) > 1
+        request.long_request_engine_num = len(chosen_engines)
+        
+        # Send request to all engines
+        send_tasks = []
+        for engine in chosen_engines:
+            send_tasks.append(
+                self._send_input(EngineCoreRequestType.ADD, request, engine)
+            )
+        
+        # Wait for all sends to complete
+        await asyncio.gather(*send_tasks)
+        
+        if not self.engines_running:
+            # Notify coordinator that we're sending a request
+            # Use the primary engine (chosen engine) for coordinator notification
+            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engines[0]))
+            await self.first_req_send_socket.send(req_msg)
+
+        self._ensure_output_queue_task()
+
+
+    async def add_request_async_based_on_request_length(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
 
         request.current_wave = self.current_wave
@@ -1260,6 +1345,51 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
         # Record which engine is chosen for this request, to handle aborts.
         self.reqs_in_flight[request.request_id] = chosen_engine
         return chosen_engine
+
+    def get_core_engine_for_request_traffic_load(self, request: EngineCoreRequest) -> EngineIdentity:
+        # Engines are in rank order.
+        # based on the traffic load, we only have two options to choose from.
+        # 1. one engine per request
+        # 2. all engines for the request
+        # we choose the case based on how many requests are waiting to be executed. we have a 
+        # threshold for the number of requests waiting to be executed.
+        # we choose the second least loaded engine if the least loaded engine is too busy.      
+        if (eng_index := request.data_parallel_rank) is None:
+            current_counts = self.lb_engines
+            # TODO use P2C alg for larger DP sizes
+            num_engines = len(current_counts)
+            
+            traffic_load_threshold = 3
+            waiting, running = current_counts[0]
+            eng_indices = []
+            if waiting < traffic_load_threshold:
+                for i in range(num_engines):
+                    eng_indices.append(i)
+                    current_counts[i][0] += self.client_count
+            else:
+                min_score = sys.maxsize
+                eng_index = 0
+                for i in range(num_engines):
+                    # Start from client_index to help with balancing when engines
+                    # are empty.
+                    idx = (self.eng_start_index + i) % num_engines
+                    waiting, running = current_counts[idx]
+                    score = waiting * 4 + running
+                    if score < min_score:
+                        min_score = score
+                        eng_index = idx
+                # Increment local waiting count for better balancing between stats
+                # updates from the coordinator (which happen every 100ms).
+                current_counts[eng_index][0] += self.client_count
+                eng_indices.append(eng_index)
+
+        chosen_engines = []
+        for eng_index in eng_indices:
+            chosen_engines.append(self.core_engines[eng_index])
+        # Record which engine is chosen for this request, to handle aborts.
+        self.reqs_in_flight[request.request_id] = chosen_engines[0]
+        return chosen_engines
+
     
     def get_core_engine_for_request(
             self, request: EngineCoreRequest) -> list[EngineIdentity]:

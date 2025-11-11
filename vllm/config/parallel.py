@@ -3,7 +3,7 @@
 
 import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import torch
 from pydantic import Field, model_validator
@@ -377,6 +377,28 @@ class ParallelConfig:
         )
 
     @staticmethod
+    def _deterministic_hash(s: str) -> int:
+        """
+        Generate a deterministic hash value for a string that is consistent
+        across different processes and Python runs. This is important for
+        distributed synchronization where different processes need to compute
+        the same hash for the same string.
+        
+        Uses MD5 hash to ensure deterministic results regardless of Python's
+        hash randomization. Returns an int64 value suitable for torch tensors.
+        """
+        if not s:
+            return 0
+        # Use MD5 for deterministic hashing (not for security)
+        hash_bytes = hashlib.md5(s.encode('utf-8'), usedforsecurity=False).digest()
+        # Convert first 8 bytes to int64 (signed)
+        # Use bitwise AND to ensure positive value within int64 range
+        hash_int = int.from_bytes(hash_bytes[:8], byteorder='big', signed=False)
+        # Ensure it fits in int64 range (0 to 2^63-1)
+        max_int64 = (1 << 63) - 1
+        return hash_int & max_int64
+
+    @staticmethod
     def has_unfinished_dp(dp_group: ProcessGroup, has_unfinished: bool) -> bool:
         tensor = torch.tensor([has_unfinished], dtype=torch.int32, device="cpu")
         # dp rank 0: has_unfinished_seqs=True
@@ -386,6 +408,33 @@ class ParallelConfig:
         torch.distributed.all_reduce(tensor, op=ReduceOp.MAX, group=dp_group)
         aggregated_has_unfinished = bool(tensor.item())
         return aggregated_has_unfinished
+    
+    @staticmethod
+    def has_unfinished_dp_and_switch_mode(dp_group: ProcessGroup, 
+                                          has_unfinished: bool,
+                                          dp_size: int,
+                                          dp_rank: int,
+                                          sync_long_request: str,
+                                          eng_indices: Optional[list[int]],
+                                          want_to_execute_long_request: bool) -> bool:
+        '''
+        tensor = [has_unfinished, want_to_execute_long_request, deterministic_hash(sync_long_request), [0]*dp_size] for each dp_rank
+        so the tensor shape is (dp_size, 3+dp_size)
+        '''
+        tensor = torch.zeros([dp_size, 3+dp_size], dtype=torch.int64, device="cpu")
+        # Initialize the row for this dp_rank: [has_unfinished, want_to_execute_long_request, deterministic_hash(sync_long_request), zeros...]
+        tensor[dp_rank, 0] = int(has_unfinished)
+        tensor[dp_rank, 1] = int(want_to_execute_long_request)
+        tensor[dp_rank, 2] = ParallelConfig._deterministic_hash(sync_long_request) if sync_long_request else 0
+        # Set engine indices flags (offset by 3: first three slots are has_unfinished, want_to_execute_long_request and deterministic_hash)
+        if eng_indices is not None:
+            for eng_index in eng_indices:
+                # Validate index to prevent out-of-bounds access
+                if 0 <= eng_index < dp_size:
+                    tensor[dp_rank, eng_index + 3] = 1
+        torch.distributed.all_reduce(tensor, op=ReduceOp.MAX, group=dp_group)
+        aggregated_has_unfinished = bool(tensor[:, 0].sum().item())
+        return aggregated_has_unfinished, tensor
 
     @staticmethod
     def sync_kv_cache_memory_size(dp_group: ProcessGroup, kv_cache_memory: int) -> int:

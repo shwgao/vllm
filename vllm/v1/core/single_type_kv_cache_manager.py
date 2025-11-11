@@ -397,10 +397,13 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         blocks = self.req_to_blocks[request_id]
         removed_blocks: list[KVCacheBlock] = []
         for i in range(last_useful_block - 1, -1, -1):
-            if blocks[i] == self._null_block:
-                # If the block is already a null block, the blocks before it
-                # should also have been set to null blocks by the previous calls
-                # to this function.
+            try:
+                if blocks[i] == self._null_block:
+                    # If the block is already a null block, the blocks before it
+                    # should also have been set to null blocks by the previous calls
+                    # to this function.
+                    break
+            except IndexError:
                 break
             removed_blocks.append(blocks[i])
             blocks[i] = self._null_block
