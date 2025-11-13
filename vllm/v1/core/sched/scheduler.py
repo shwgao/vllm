@@ -201,6 +201,11 @@ class Scheduler(SchedulerInterface):
         self.switch_mode: str = 'sequential' # 'sequential'
         self.track_last_request_need_to_switch: bool = False
         self.set_kv_cache_config_already: bool = False
+        
+        self.cached_TP_requests_order: list[Request] = []
+        self.pre_executed_TP_requests: list[Request] = []
+        self.TP_wave_counter: int = -1
+        self.dynamic_requests: list[Request] = []
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
@@ -220,9 +225,12 @@ class Scheduler(SchedulerInterface):
         preempted_reqs: list[Request] = []
         
         # Check if we're in long request execution mode
-        switch_dtp_group_state = False
+        
+        set_dtp_group_status = False
+        reset_dtp_group_status = False
+        
         if self.long_request_execution_mode:
-            switch_dtp_group_state = self._schedule_long_request_exclusive()
+            set_dtp_group_status = self._schedule_long_request_exclusive()
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
@@ -390,52 +398,157 @@ class Scheduler(SchedulerInterface):
 
                 request = self.waiting.peek_request()
                 
+                # 如果正在以TP模式执行  
                 if self.long_request_execution_mode:
-                    if request.request_id == self.pending_long_request_sync_id:
-                        self.track_last_request_need_to_switch = True
-                    
-                    if request.long_request_engines != self.long_request_engines:
-                        # logger.info(f"request {request.request_id} is not in the long request engines {self.long_request_engines}")
-                        self.waiting.pop_request()
-                        skipped_waiting_requests.add_request(request)
-                        
-                        if self.track_last_request_need_to_switch:
-                            self.track_last_request_need_to_switch = False
-                        continue
-                    else:
-                        if self.track_last_request_need_to_switch:
-                            self.last_request_need_to_switch = request.request_id
-                            logger.info(f"last request need to switch: {self.last_request_need_to_switch}")
-
-                else:
-                    # Shouwei's note: Skip the long request and wait for the coordinator 
-                    # to start the execution mode
-                    if request.long_request_engines != self.running_parallel_engines:
-                        self.waiting.pop_request()
-                        skipped_waiting_requests.add_request(request)
-                        if self.pending_long_request_sync_id is None:
-                            self.pending_long_request_sync_id = request.request_id
-                            self.long_request_engines = request.long_request_engines
-                        
-                            if len(self.running) > 0:
-                                # record the last request before the switch mode is requested.
-                                if self.last_request_before_switch is None:
-                                    self.last_request_before_switch = self.running[-1].request_id
-                                    self.last_request_before_switch_finished = False
-                            else:
-                                # if there is no running request, it means the last request before the switch mode is finished.
-                                self.last_request_before_switch_finished = True
+                    # TODO： 设置output engine，确保只有一个engine在输出
+                    # 如果来的是请求切换状态的request
+                    if request.switch_running_mode_flag:
+                        # 正在执行TP模式时，想要切换为DP模式。如果是preempt模式，我们可以直接在这里切换，
+                        # 如果是sequential模式的话，我们需要确保这些正在执行的request都执行完了才切换。
+                        if request.switch_mode == 'DP':
+                            self.waiting_switch_success_flag = 'DP'
+                            # 如果切换方式为直接抢占，那么我们就需要将正在以TP模式运行的请求抢占，然后切换为DP模式
+                            if request.switch_method == 'hard-preempt':
+                                preempted_reqs = []
+                                for i, req in enumerate(self.running):
+                                    # 我们将这些request都转换成DP模式，每个request都分配一个DP rank
+                                    new_engine_ids = req.long_request_engines[i%len(req.long_request_engines)]
+                                    req.long_request_engines = [new_engine_ids]
+                                    req.output_engine = new_engine_ids
+                                    # 将其从现在的running中抢占
+                                    scheduled_running_reqs.remove(req)
+                                    token_budget += num_scheduled_tokens[req.request_id]
+                                    req_to_new_blocks.pop(req.request_id)
+                                    num_scheduled_tokens.pop(req.request_id)
+                                    self.kv_cache_manager.free(req)
+                                    req.status = RequestStatus.PREEMPTED
+                                    req.num_computed_tokens = 0
+                                    req.num_preemptions += 1
+                                    if self.log_stats:
+                                        req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
+                                    preempted_reqs.append(req)
                                 
-                            # check the switch mode and set the want_to_execute_long_request flag
-                            if self.switch_mode == 'preempt':
+                                self.waiting.prepend_request(preempted_reqs)
+                                request.switch_running_mode_flag = False
+                                self.running = []
+                                self.long_request_execution_mode = False
+                                reset_dtp_group_status = True
+                                self.long_request_engines = request.long_request_engines
+                                self.running_parallel_engines = request.long_request_engines
+                                self.waiting_switch_success_flag = None
+                                
+                                continue
+                            # 如果切换方式为顺序执行，那么我们就需要确定这些正在执行的request都执行完了才切换，
+                            # 那么我们需要设置一个状态记录我们正处于切换状态，保证在切换成功之前，忽略其他切换的请求。
+                            # 但是我们仍然可以执行其他的请求，把其他请求也按照TP模式执行，并记录下来。
+                            # TODO: 还没有完成
+                            elif request.switch_method == 'sequential':
+                                self.switch_mode = 'sequential'
+                                self.last_request_before_switch_finished = False
+                                if len(self.running) > 0:
+                                    self.last_request_before_switch = self.running[-1].request_id
+                                if len(scheduled_new_reqs) > 0:
+                                    self.last_request_before_switch = scheduled_new_reqs[-1].request_id
+                                    logger.info(f"************** rare case **************")
+                                if not self.last_request_before_switch:
+                                    self.last_request_before_switch_finished = True
+                                    
+                                continue
+                            else:
+                                raise ValueError(f"Invalid switch method: {request.switch_method}")
+                        else:
+                            raise ValueError(f"Invalid switch mode: {request.switch_mode}")
+                    # 如果来的是正常的request
+                    else:
+                        # 如果request的engine id不是当前rank，那么就不是我们需要执行的request，跳过。
+                        if self.dp_rank not in request.long_request_engines:
+                            self.waiting.pop_request()
+                            continue
+                        # 这时如果没有新的TP request来了，那么我们可以让其先执行后面DP request
+                        if request.long_request_engines != self.long_request_engines:
+                            # 我们只考虑单DP engine的情况
+                            logger.info(f"*************************************")
+                            if set(request.long_request_engines).issubset(self.long_request_engines):
+                                # 这里我们需要切换engine id，确保worker正常执行，
+                                # 同时我们还需要记录下这些切换的request id，在后面执行结束的时候，需要切换回来。
+                                request.old_long_request_engines = request.long_request_engines
+                                request.long_request_engines = self.long_request_engines
+                                self.dynamic_requests.append(request)
+                                # 这里不能continue，我们需要让下面的代码正常schedule这个request。
+                            else:
+                                raise NotImplementedError("Multiple DP engines are not implemented yet")
+                                self.waiting.pop_request()
+                                skipped_waiting_requests.add_request(request)
+                                continue
+                # 如果正在执行DP模式
+                else:
+                    # 如果请求切换状态的request来了
+                    if request.switch_running_mode_flag:                        
+                        # 正在执行DP模式时，想要切换为TP模式。如果是preempt模式，我们需要立即设置
+                        # want_to_execute_long_request为True，
+                        # 如果是sequential模式的话，我们需要确保这些正在执行DP的request都执行完了才切换。
+                        if request.switch_mode == 'TP':
+                            self.waiting_switch_success_flag = 'TP'
+                            
+                            self.TP_wave_counter = -1
+                            
+                            if request.switch_method == 'hard-preempt':
+                                # 这里我们不能直接抢占，因为DP模式不是同步的，我们不知道每个DP是否都执行完了前面的DP request。
+                                raise NotImplementedError("Hard preempt method is not implemented yet")
                                 self.want_to_execute_long_request = True
-                            elif self.switch_mode == 'sequential':
-                                if self.last_request_before_switch_finished:
+                                request = self.waiting.peek_request()
+                                self.pending_long_request_sync_id = request.request_id
+                                # 这里我们不再schedule其他的request
+                                break
+                            elif request.switch_method == 'sequential':
+                                self.pending_long_request_sync_id = request.request_id
+                                self.long_request_engines = request.long_request_engines
+                                self.switch_method = 'sequential'
+                                self.last_request_before_switch_finished = False
+                                if len(self.running) > 0:
+                                    self.last_request_before_switch = self.running[-1].request_id
+                                if len(scheduled_new_reqs) > 0:
+                                    self.last_request_before_switch = scheduled_new_reqs[-1].request_id
+                                    logger.info(f"************** rare case **************")
+                                if not self.last_request_before_switch:
+                                    self.last_request_before_switch_finished = True
                                     self.want_to_execute_long_request = True
                             else:
-                                raise ValueError(f"Invalid switch mode: {self.switch_mode}")
-                    
+                                raise ValueError(f"Invalid switch method: {request.switch_method}")
+                            
+                        # 如果来了切换DP模式的请求，那我们直接放弃切换成TP模式即可
+                        elif request.switch_mode == 'DP':
+                            # raise NotImplementedError("DP -> TP -> DP is not implemented yet")
+                            logger.info(f"DP -> TP -> DP is not implemented yet")
+                            self.waiting_switch_success_flag = None
+                            self.want_to_execute_long_request = False
+                            self.last_request_before_switch = None
+                            self.last_request_before_switch_finished = True
+
+                        request.switch_running_mode_flag = False
                         continue
+                    
+                    # 如果来的是正常的request
+                    else:
+                        # 如果request的engine id不是当前rank，那么就不是我们需要执行的request，跳过。
+                        if self.dp_rank not in request.long_request_engines:
+                            self.waiting.pop_request()
+                            continue
+                        # 这时来的是TP request，我们也可以执行，只是不需要每个DP都执行这些request了。
+                        # 我们根据TP_wave_counter来决定执行哪个DP的request。
+                        if request.long_request_engines == self.long_request_engines:
+                            self.TP_wave_counter += 1
+                            self.cached_TP_requests_order.append(request)
+                            if self.dp_rank != self.long_request_engines[
+                                self.TP_wave_counter%len(self.long_request_engines)
+                                ]:
+                                self.waiting.pop_request()
+                                continue
+                            else:
+                                self.pre_executed_TP_requests.append(request)
+                            
+                        else:
+                            raise NotImplementedError("rare case: request.long_request_engines != self.long_request_engines")
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -717,8 +830,9 @@ class Scheduler(SchedulerInterface):
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
             pending_long_request_sync_id=self.pending_long_request_sync_id,
-            switch_dtp_group_state=switch_dtp_group_state,
             long_request_engine_ids=self.long_request_engines,
+            set_dtp_group_status=set_dtp_group_status,
+            reset_dtp_group_status=reset_dtp_group_status,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:
@@ -770,9 +884,9 @@ class Scheduler(SchedulerInterface):
     
     def _schedule_long_request_exclusive(self) -> bool:
         """Schedule only the long request, preempting all other running requests."""
-        switch_dtp_group_state = False
+        set_dtp_group_status = False
         if not self.switch_dtp_group_state_already:
-            switch_dtp_group_state = True
+            set_dtp_group_status = True
             self.switch_dtp_group_state_already = True
         
         if self.running and self.running[0].long_request_engines != self.long_request_engines:
@@ -795,7 +909,7 @@ class Scheduler(SchedulerInterface):
                 self.kv_cache_config_set()
                 self.set_kv_cache_config_already = True
           
-        return switch_dtp_group_state
+        return set_dtp_group_status
     
     def _create_empty_scheduler_output(self) -> SchedulerOutput:
         """Create an empty scheduler output."""
@@ -1252,12 +1366,13 @@ class Scheduler(SchedulerInterface):
         if self.last_request_before_switch in self.finished_req_ids:
             self.last_request_before_switch = None
             self.last_request_before_switch_finished = True
-            if self.switch_mode == 'sequential' and self.last_request_before_switch_finished:
+            if self.switch_method == 'sequential' and self.last_request_before_switch_finished:
                 self.want_to_execute_long_request = True
 
         
         # Shouwei's note: If the long request is finished, reset the state
         if self.last_request_need_to_switch in self.finished_req_ids:
+            
             self.pending_long_request_sync_id = None
             self.last_request_need_to_switch = None
             self.running_parallel_engines = [self.parallel_config.data_parallel_rank]

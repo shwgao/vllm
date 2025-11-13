@@ -134,6 +134,8 @@ class Request:
         self.is_long_request: bool = is_long_request
         self.long_request_sync_id: Optional[str] = long_request_sync_id
         self.long_request_engines: Optional[list[int]] = long_request_engines
+        
+        self.switch_running_mode_flag: bool = False
 
     @classmethod
     def from_engine_core_request(

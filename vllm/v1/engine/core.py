@@ -76,6 +76,13 @@ from dataclasses import replace
 
 logger = init_logger(__name__)
 
+
+def same(tensor_column):
+    """Check if all elements in a tensor column are equal."""
+    if tensor_column.numel() == 0:
+        return True
+    return (tensor_column == tensor_column[0]).all().item()
+
 POLLING_TIMEOUT_S = 2.5
 HANDSHAKE_TIMEOUT_MINS = 5
 
@@ -350,10 +357,13 @@ class EngineCore:
         # except Exception as e:
         #     logger.info(f"dp rank {self.dp_rank} new scheduled request: None")
         
-        
-        if scheduler_output.switch_dtp_group_state:
+        if scheduler_output.set_dtp_group_status:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
             self.collective_rpc("worker_set_dtp_group_state", args=(True,))
+
+        if scheduler_output.reset_dtp_group_status:
+            # logger.info(f"Engine {self.engine_index} resetting DTP group state to False")
+            self.collective_rpc("worker_set_dtp_group_state", args=(False,))
 
         with self.log_error_detail(scheduler_output):
             model_output = self.model_executor.execute_model(scheduler_output)
@@ -1219,7 +1229,7 @@ class DPEngineCoreProc(EngineCoreProc):
             # self.engines_running = self._has_global_unfinished_reqs(
             #     local_unfinished_reqs
             # )
-            self.engines_running = self._has_global_unfinished_reqs_and_switch_mode(
+            self.engines_running = self._has_global_unfinished_reqs_simple(
                 local_unfinished_reqs
             )
             
@@ -1254,6 +1264,38 @@ class DPEngineCoreProc(EngineCoreProc):
             return True
 
         return ParallelConfig.has_unfinished_dp(self.dp_group, local_unfinished)
+    
+    def _has_global_unfinished_reqs_simple(self, local_unfinished: bool) -> bool:
+        self.step_counter += 1
+        if self.step_counter % 8 != 0:
+            return True
+
+        has_unfinished, tensor = ParallelConfig.has_unfinished_dp_and_switch_mode(
+            self.dp_group,
+            local_unfinished,
+            self.dp_size,
+            self.dp_rank,
+            self.scheduler.pending_long_request_sync_id,
+            self.scheduler.long_request_engines,
+            self.scheduler.want_to_execute_long_request
+        )
+        
+        want_to_execute_long_request = bool(tensor[:, 1].min().item())
+        want_to_execute_same_long_request = bool((tensor[:, 2] == tensor[0, 2]).all().item())
+        
+        if want_to_execute_long_request and want_to_execute_same_long_request:
+            self._sync_long_request_status()
+            
+            self.scheduler.cached_TP_requests_order = []
+            self.scheduler.pre_executed_TP_requests = []
+        
+        
+        return has_unfinished
+
+    def _sync_long_request_status(self):
+        for request in self.scheduler.cached_TP_requests_order:
+            request.status = RequestStatus.WAITING
+        
     
     def _has_global_unfinished_reqs_and_switch_mode(self, local_unfinished: bool) -> bool:
         # Optimization - only perform finish-sync all-reduce every 8 steps.

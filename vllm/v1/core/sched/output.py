@@ -183,3 +183,8 @@ class SchedulerOutput:
     
     # Long request engine IDs
     long_request_engine_ids: Optional[list[int]] = field(default_factory=lambda: [0, 1])
+
+    # Whether to set the DTP group state
+    set_dtp_group_status: bool = False
+    # Whether to reset the DTP group state
+    reset_dtp_group_status: bool = False
