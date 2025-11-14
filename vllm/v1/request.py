@@ -136,6 +136,8 @@ class Request:
         self.long_request_engines: Optional[list[int]] = long_request_engines
         
         self.switch_running_mode_flag: bool = False
+        self.switch_mode: str | None = None
+        self.switch_method: str | None = None
 
     @classmethod
     def from_engine_core_request(
@@ -161,6 +163,9 @@ class Request:
             is_long_request=request.is_long_request,
             long_request_sync_id=request.request_id,
             long_request_engines=request.long_request_engines,
+            switch_running_mode_flag=request.switch_running_mode_flag,
+            switch_mode=request.switch_mode,
+            switch_method=request.switch_method,
         )
 
     def append_output_token_ids(

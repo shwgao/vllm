@@ -447,6 +447,17 @@ class ParallelConfig:
         return tensor.item()
     
     @staticmethod
+    def sync_pre_executed_TP_requests(dp_group: ProcessGroup,
+                                      pre_executed_TP_requests: dict[str, (bool, list[int])]):
+        gathered_objects = [None] * dp_group.size()
+        torch.distributed.all_gather_object(gathered_objects, 
+                                            pre_executed_TP_requests, 
+                                            group=dp_group)
+        return gathered_objects
+        
+    
+    
+    @staticmethod
     def sync_long_request_across_dp_ranks(dp_group: "ProcessGroup",
                                           sync_long_request: str,
                                           eng_indices: list[int]):

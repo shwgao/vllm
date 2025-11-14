@@ -203,6 +203,7 @@ class Scheduler(SchedulerInterface):
         self.set_kv_cache_config_already: bool = False
         
         self.cached_TP_requests_order: list[Request] = []
+        self.skipped_TP_requests: list[Request] = []
         self.pre_executed_TP_requests: list[Request] = []
         self.TP_wave_counter: int = -1
         self.dynamic_requests: list[Request] = []
@@ -409,7 +410,7 @@ class Scheduler(SchedulerInterface):
                             self.waiting_switch_success_flag = 'DP'
                             # 如果切换方式为直接抢占，那么我们就需要将正在以TP模式运行的请求抢占，然后切换为DP模式
                             if request.switch_method == 'hard-preempt':
-                                preempted_reqs = []
+                                self.running.extend(scheduled_new_reqs)
                                 for i, req in enumerate(self.running):
                                     # 我们将这些request都转换成DP模式，每个request都分配一个DP rank
                                     new_engine_ids = req.long_request_engines[i%len(req.long_request_engines)]
@@ -428,6 +429,7 @@ class Scheduler(SchedulerInterface):
                                         req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
                                     preempted_reqs.append(req)
                                 
+                                scheduled_new_reqs = []                                    
                                 self.waiting.prepend_request(preempted_reqs)
                                 request.switch_running_mode_flag = False
                                 self.running = []
@@ -536,16 +538,14 @@ class Scheduler(SchedulerInterface):
                             continue
                         # 这时来的是TP request，我们也可以执行，只是不需要每个DP都执行这些request了。
                         # 我们根据TP_wave_counter来决定执行哪个DP的request。
-                        if request.long_request_engines == self.long_request_engines:
-                            self.TP_wave_counter += 1
-                            self.cached_TP_requests_order.append(request)
+                        if self.pending_long_request_sync_id and request.long_request_engines == self.long_request_engines:
                             if self.dp_rank != self.long_request_engines[
                                 self.TP_wave_counter%len(self.long_request_engines)
                                 ]:
                                 self.waiting.pop_request()
+                                self.TP_wave_counter += 1
+                                self.cached_TP_requests_order.append(request)
                                 continue
-                            else:
-                                self.pre_executed_TP_requests.append(request)
                             
                         else:
                             raise NotImplementedError("rare case: request.long_request_engines != self.long_request_engines")
@@ -742,6 +742,10 @@ class Scheduler(SchedulerInterface):
                     )
                 if request.status == RequestStatus.WAITING:
                     scheduled_new_reqs.append(request)
+                    if self.want_to_execute_long_request:
+                        self.pre_executed_TP_requests.append(request)
+                        self.TP_wave_counter += 1
+                        self.cached_TP_requests_order.append(request)
                 elif request.status == RequestStatus.PREEMPTED:
                     scheduled_resumed_reqs.append(request)
                 else:
@@ -904,10 +908,10 @@ class Scheduler(SchedulerInterface):
                 
             self.running.clear()
             
-            # Set kv cache config
-            if not self.set_kv_cache_config_already:
-                self.kv_cache_config_set()
-                self.set_kv_cache_config_already = True
+        # Set kv cache config
+        if not self.set_kv_cache_config_already:
+            self.kv_cache_config_set()
+            self.set_kv_cache_config_already = True
           
         return set_dtp_group_status
     
@@ -937,6 +941,38 @@ class Scheduler(SchedulerInterface):
             switch_dtp_group_state=False,
             long_request_engine_ids=None,
         )
+    
+    def _merge_pre_executed_TP_requests(
+        self, 
+        merged: dict[str, (bool, list[int])]
+    ) -> None:
+        if self.running:
+            # preempt the running requests.
+            for req in self.running:
+                self.kv_cache_manager.free(req)
+                req.status = RequestStatus.PREEMPTED
+                req.num_computed_tokens = 0
+                req.num_preemptions += 1
+            self.running.clear()
+            
+        # restore the waiting queue to want to execute the TP request.
+        self.waiting.prepend_requests(self.cached_TP_requests_order)
+        for request in self.waiting:
+            if request.request_id in merged:
+                if merged[request.request_id][0] == RequestStatus.FINISHED_STOPPED:
+                    # remove this request from the waiting queue.
+                    self.waiting.remove_request(request)
+                    continue
+                
+                if request.request_id in self.pre_executed_TP_requests:
+                    continue
+                
+                if len(merged[request.request_id][1]):
+                    # this request is finished, remove it from the waiting queue.
+                    request.status = RequestStatus.PREEMPTED
+                    request.num_computed_tokens = 0
+                    request.num_preemptions += 1
+                    request.append_output_token_ids([request.request_id][1])
 
     def _update_after_schedule(
         self,

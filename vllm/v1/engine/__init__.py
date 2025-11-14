@@ -71,7 +71,7 @@ class EngineCoreRequest(
 
     trace_headers: Mapping[str, str] | None = None
     
-        # Used for long request synchronization across DP engines
+    # Used for long request synchronization across DP engines
     is_long_request: bool = False
     long_request_sync_id: str | None = None
     
@@ -79,6 +79,10 @@ class EngineCoreRequest(
     # more than one engine to finish
     long_request_engine_num: int = 1
     long_request_engines: list[int] = []
+    
+    switch_running_mode_flag: bool = False
+    switch_mode: str | None = None # TP or DP
+    switch_method: str | None = None # hard-preempt or sequential
 
 
 class EngineCoreEventType(enum.IntEnum):

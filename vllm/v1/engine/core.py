@@ -1286,15 +1286,35 @@ class DPEngineCoreProc(EngineCoreProc):
         if want_to_execute_long_request and want_to_execute_same_long_request:
             self._sync_long_request_status()
             
-            self.scheduler.cached_TP_requests_order = []
+            self.scheduler.long_request_execution_mode = True
+            self.scheduler.pending_long_request_sync_id = None
+            self.scheduler.want_to_execute_long_request = False
+            self.scheduler.TP_wave_counter = -1
             self.scheduler.pre_executed_TP_requests = []
-        
+            self.scheduler.cached_TP_requests_order = []
+            self.scheduler.switch_dtp_group_state_already = False
         
         return has_unfinished
 
     def _sync_long_request_status(self):
-        for request in self.scheduler.cached_TP_requests_order:
-            request.status = RequestStatus.WAITING
+        pre_executed_TP_requests = {}
+        for request in self.scheduler.pre_executed_TP_requests:
+            pre_executed_TP_requests[request.request_id] = (
+                request.status, 
+                request._output_token_ids
+            )
+        synced_pre_executed_TP_requests = ParallelConfig._sync_pre_executed_TP_requests(
+            self.dp_group,
+            pre_executed_TP_requests
+        )
+        
+        merged = {}
+        for d in synced_pre_executed_TP_requests:
+            merged.update(d)
+        
+        self.scheduler._merge_pre_executed_TP_requests(merged)
+        self.scheduler.cached_TP_requests_order = []
+        self.scheduler.pre_executed_TP_requests = []
         
     
     def _has_global_unfinished_reqs_and_switch_mode(self, local_unfinished: bool) -> bool:
