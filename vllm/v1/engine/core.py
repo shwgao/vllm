@@ -172,6 +172,7 @@ class EngineCore:
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
         )
+        self.scheduler.dp_rank = self.dp_rank
         self.use_spec_decode = vllm_config.speculative_config is not None
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
@@ -367,6 +368,8 @@ class EngineCore:
 
         with self.log_error_detail(scheduler_output):
             model_output = self.model_executor.execute_model(scheduler_output)
+            
+        logger.info(f"dp rank {self.dp_rank} sampled_token_ids: {model_output.sampled_token_ids}")
 
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
@@ -1298,12 +1301,12 @@ class DPEngineCoreProc(EngineCoreProc):
 
     def _sync_long_request_status(self):
         pre_executed_TP_requests = {}
-        for request in self.scheduler.pre_executed_TP_requests:
-            pre_executed_TP_requests[request.request_id] = (
+        for request_id, request in self.scheduler.pre_executed_TP_requests.items():
+            pre_executed_TP_requests[request_id] = (
                 request.status, 
                 request._output_token_ids
             )
-        synced_pre_executed_TP_requests = ParallelConfig._sync_pre_executed_TP_requests(
+        synced_pre_executed_TP_requests = ParallelConfig.sync_pre_executed_TP_requests(
             self.dp_group,
             pre_executed_TP_requests
         )

@@ -47,6 +47,9 @@ class Request:
         is_long_request: bool = False,
         long_request_sync_id: Optional[str] = None,
         long_request_engines: Optional[list[int]] = None,
+        switch_running_mode_flag: bool = False,
+        switch_mode: str | None = None,
+        switch_method: str | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -135,9 +138,9 @@ class Request:
         self.long_request_sync_id: Optional[str] = long_request_sync_id
         self.long_request_engines: Optional[list[int]] = long_request_engines
         
-        self.switch_running_mode_flag: bool = False
-        self.switch_mode: str | None = None
-        self.switch_method: str | None = None
+        self.switch_running_mode_flag: bool = switch_running_mode_flag
+        self.switch_mode: str | None = switch_mode
+        self.switch_method: str | None = switch_method
 
     @classmethod
     def from_engine_core_request(
@@ -181,6 +184,11 @@ class Request:
 
         if self.get_hash_new_full_blocks is not None:
             self.block_hashes.extend(self.get_hash_new_full_blocks())
+            
+    def reset_output_token_ids(self, token_ids: list[int]) -> None:
+        self._output_token_ids = []
+        self.prompt_token_ids.extend(token_ids)
+        self.num_prompt_tokens += len(token_ids)
 
     @property
     def use_structured_output(self) -> bool:

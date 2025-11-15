@@ -694,6 +694,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 output_token_ids=[],
                 lora_request=new_req_data.lora_request,
             )
+            if req_id in self.requests:
+                # This is true when shifting DP and TP engines.
+                self.input_batch.remove_request(req_id)
+                self.encoder_cache.pop(req_id, None)
             self.requests[req_id] = req_state
 
             # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
