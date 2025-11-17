@@ -1091,6 +1091,19 @@ async def benchmark(
             print("Profiler stopped")
 
     await session.close()
+    
+    # Write prompts and generated tokens to results.txt
+    with open("results.txt", "w", encoding="utf-8") as f:
+        for i, (request, output) in enumerate(zip(input_requests, outputs)):
+            f.write(f"=== Request {i+1} ===\n")
+            # Handle prompt which can be str or list[str]
+            prompt_str = request.prompt
+            if isinstance(prompt_str, list):
+                prompt_str = "\n".join(prompt_str)
+            f.write(f"Prompt: {prompt_str}\n")
+            f.write(f"Generated Text: {output.generated_text}\n")
+            f.write("\n")
+    
     return result
 
 

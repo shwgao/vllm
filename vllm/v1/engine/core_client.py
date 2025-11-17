@@ -1178,14 +1178,14 @@ class DPAsyncMPClient(AsyncMPClient):
         request.current_wave = self.current_wave
         request.client_index = self.client_index
         
-        engine_indices_groups = [[0,1],[0,1],[0,1],[1],[0],[1],[0],[1],[0],[1],[0],[1],[0],[1],[0],[0,1],[0,1],[0,1]]
+        engine_indices_groups = [[0,1],[0,1],[0,1],[0,1],[1],[0],[1],[0],[1],[0],[1],[0],[1],[0],[1],[0],[0,1],[0,1],[0,1]]
         engine_indices = engine_indices_groups[self.step_count%len(engine_indices_groups)]
         chosen_engine = [self.core_engines[eng_index] for eng_index in engine_indices]
-        if self.step_count in [0, 15]:
+        if self.step_count in [0, 16]:
             request.switch_running_mode_flag = True
             request.switch_mode = 'TP'
             request.switch_method = 'sequential'
-        if self.step_count in [3, 4]:
+        if self.step_count in [3]:
             request.switch_running_mode_flag = True
             request.switch_mode = 'DP'
             request.switch_method = 'hard-preempt'

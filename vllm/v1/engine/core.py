@@ -342,10 +342,29 @@ class EngineCore:
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
             return {}, False
+        
+        if self.scheduler.long_request_execution_mode:
+            # we have to sync the TP requests number across all the ranks
+            TP_requests_counter = 0
+            for request in self.scheduler.waiting:
+                if len(request.long_request_engines) > 1:
+                    TP_requests_counter += 1
+                else:
+                    break
+            TP_requests_number = ParallelConfig.sync_TP_requests_number(
+                self.dp_group,
+                self.dp_size,
+                self.dp_rank,
+                TP_requests_counter
+            )
+            self.scheduler.TP_execute_number = TP_requests_number
+            # logger.info(f"dp rank {self.dp_rank} TP requests number: {TP_requests_number}")
 
         # logger.info(f"dp rank {self.dp_rank} scheduling")
         scheduler_output = self.scheduler.schedule()
         
+        for request in scheduler_output.scheduled_new_reqs:
+            logger.info(f"dp rank {self.dp_rank} scheduled new requests: {request.req_id}")
         # logger.info(f"dp rank {self.dp_rank} scheduler length of running queue: {len(self.scheduler.running)}")
         # logger.info(f"dp rank {self.dp_rank} scheduler length of waiting queue: {len(self.scheduler.waiting)}")
         
@@ -369,7 +388,7 @@ class EngineCore:
         with self.log_error_detail(scheduler_output):
             model_output = self.model_executor.execute_model(scheduler_output)
             
-        logger.info(f"dp rank {self.dp_rank} sampled_token_ids: {model_output.sampled_token_ids}")
+        # logger.info(f"dp rank {self.dp_rank} sampled_token_ids: {model_output.sampled_token_ids}")
 
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
@@ -1292,9 +1311,9 @@ class DPEngineCoreProc(EngineCoreProc):
             self.scheduler.long_request_execution_mode = True
             self.scheduler.pending_long_request_sync_id = None
             self.scheduler.want_to_execute_long_request = False
-            self.scheduler.TP_wave_counter = -1
-            self.scheduler.pre_executed_TP_requests = []
-            self.scheduler.cached_TP_requests_order = []
+            self.scheduler.TP_wave_counter = 0
+            self.scheduler.pre_executed_TP_requests = {}
+            self.scheduler.cached_TP_requests_order.clear()
             self.scheduler.switch_dtp_group_state_already = False
         
         return has_unfinished
@@ -1316,9 +1335,6 @@ class DPEngineCoreProc(EngineCoreProc):
             merged.update(d)
         
         self.scheduler._merge_pre_executed_TP_requests(merged)
-        self.scheduler.cached_TP_requests_order = []
-        self.scheduler.pre_executed_TP_requests = []
-        
     
     def _has_global_unfinished_reqs_and_switch_mode(self, local_unfinished: bool) -> bool:
         # Optimization - only perform finish-sync all-reduce every 8 steps.

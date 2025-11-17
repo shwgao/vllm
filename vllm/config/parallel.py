@@ -455,7 +455,15 @@ class ParallelConfig:
                                             group=dp_group)
         return gathered_objects
         
-    
+    @staticmethod
+    def sync_TP_requests_number(dp_group: ProcessGroup,
+                                dp_size: int,
+                                dp_rank: int,
+                                TP_requests_number: int):
+        tensor = torch.zeros([dp_size], dtype=torch.int32, device="cpu")
+        tensor[dp_rank] = TP_requests_number
+        torch.distributed.all_reduce(tensor, op=ReduceOp.SUM, group=dp_group)
+        return tensor.min().item()
     
     @staticmethod
     def sync_long_request_across_dp_ranks(dp_group: "ProcessGroup",

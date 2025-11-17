@@ -272,3 +272,11 @@ _FINISHED_REASON_MAP = {
     RequestStatus.FINISHED_ABORTED: FinishReason.ABORT,
     RequestStatus.FINISHED_IGNORED: FinishReason.LENGTH,
 }
+
+STOP_STATUS_SET = {
+    RequestStatus.FINISHED_STOPPED,
+    RequestStatus.FINISHED_LENGTH_CAPPED,
+    RequestStatus.FINISHED_ABORTED,
+    RequestStatus.FINISHED_IGNORED,
+    RequestStatus.FINISHED_STOPPED,
+}
