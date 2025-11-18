@@ -250,8 +250,8 @@ def _get_current_request_rate_real_world(
         # Default: three peaks pattern similar to the first image
         peaks = [
             {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 10.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 15.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.70, 'end_ratio': 0.85, 'peak_rps': 17.0, 'shape': 'gaussian'},
+            # {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 15.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.50, 'end_ratio': 0.65, 'peak_rps': 17.0, 'shape': 'gaussian'},
         ]
     
     progress = request_index / max(total_requests - 1, 1)

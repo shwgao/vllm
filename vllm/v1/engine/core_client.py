@@ -1171,6 +1171,45 @@ class DPAsyncMPClient(AsyncMPClient):
         await to_await
 
         self._ensure_output_queue_task()
+        
+        
+    async def add_request_async_manipulated(self, request: EngineCoreRequest) -> None:
+        self._ensure_stats_update_task()
+
+        request.current_wave = self.current_wave
+        request.client_index = self.client_index
+
+        chosen_engine = self.get_core_engine_for_request_original(request)
+        max_step_count = 200
+        switch_start_steps = [int(max_step_count*x) for x in [0.0, 0.5]]
+        switch_end_steps = [int(max_step_count*x) for x in [0.75, 1.0]]
+        self.step_count += 1
+        
+        if self.step_count in switch_start_steps:
+            request.switch_running_mode_flag = True
+            request.switch_mode = 'DP'
+            request.switch_method = 'hard-preempt'
+        elif self.step_count in switch_end_steps:
+            request.switch_running_mode_flag = True
+            request.switch_mode = 'TP'
+            request.switch_method = 'sequential'
+        else:
+            request.switch_running_mode_flag = False
+        engine_indices = []
+        engine_indices.append(self.core_engines.index(chosen_engine))
+        request.long_request_engines = engine_indices
+        request.is_long_request = False
+        request.long_request_engine_num = 1
+        # logger.info(f"chosen_engine: {chosen_engine} for request {request.request_id}")
+        to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)
+        if not self.engines_running:
+            # Notify coordinator that we're sending a request
+            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engine))
+            await self.first_req_send_socket.send(req_msg)
+
+        await to_await
+
+        self._ensure_output_queue_task()
 
     async def add_request_async_custom(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()

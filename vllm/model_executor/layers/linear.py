@@ -361,7 +361,7 @@ class LinearBase(CustomOp):
             sharded_biases = []
             for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
                 sharded_weights.append(self.old_weight[start_idx:end_idx, :])
-                if not self.skip_bias_add:
+                if not self.skip_bias_add and self.bias:
                     sharded_biases.append(self.old_bias[start_idx:end_idx])
             
             # Concatenate all sharded weights along the first dimension
@@ -370,7 +370,7 @@ class LinearBase(CustomOp):
             self.weight = Parameter(new_weight)
             
             # bias is also sharded
-            if not self.skip_bias_add:
+            if not self.skip_bias_add and self.bias:
                 new_bias = torch.cat(sharded_biases, dim=0)
                 self.bias = Parameter(new_bias)
             
