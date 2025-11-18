@@ -230,7 +230,7 @@ def _get_current_request_rate_real_world(
     request_index: int,
     total_requests: int,
     peaks: list[dict] | None = None,
-    low_activity_rps: float = 3.0,
+    low_activity_rps: float = 10.0,
 ) -> float:
     """
     Calculate the current request rate for a real-world workload pattern
@@ -249,9 +249,9 @@ def _get_current_request_rate_real_world(
     if peaks is None:
         # Default: three peaks pattern similar to the first image
         peaks = [
-            {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 10.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.0, 'end_ratio': 0.15, 'peak_rps': 30.0, 'shape': 'gaussian'},
             # {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 15.0, 'shape': 'gaussian'},
-            {'start_ratio': 0.50, 'end_ratio': 0.65, 'peak_rps': 17.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.60, 'end_ratio': 0.75, 'peak_rps': 37.0, 'shape': 'gaussian'},
         ]
     
     progress = request_index / max(total_requests - 1, 1)
@@ -264,6 +264,8 @@ def _get_current_request_rate_real_world(
         shape = peak.get('shape', 'gaussian')
         
         if start_ratio <= progress <= end_ratio:
+            return peak_rps
+            
             # Calculate position within the peak (0.0 to 1.0)
             peak_progress = (progress - start_ratio) / (end_ratio - start_ratio)
             
@@ -289,10 +291,10 @@ def _get_current_request_rate_real_world(
                 # Default: use peak value
                 return peak_rps
     
-    # Check if we're past all peaks (should be zero activity)
-    max_end_ratio = max([peak['end_ratio'] for peak in peaks]) if peaks else 0.0
-    if progress > max_end_ratio + 0.1:  # Small buffer before zero activity
-        return 0.0
+    # # Check if we're past all peaks (should be zero activity)
+    # max_end_ratio = max([peak['end_ratio'] for peak in peaks]) if peaks else 0.0
+    # if progress > max_end_ratio + 0.1:  # Small buffer before zero activity
+    #     return 0.0
     
     # Low activity period
     return low_activity_rps
@@ -349,7 +351,6 @@ async def get_request_real_world(
             request_index,
             total_requests,
             peaks,
-            low_activity_rps,
         )
         request_rates.append(current_request_rate)
         if current_request_rate == float("inf") or current_request_rate == 0.0:
