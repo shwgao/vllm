@@ -410,6 +410,8 @@ class Scheduler(SchedulerInterface):
                     break
 
                 request = self.waiting.peek_request()
+                if request.request_id == 'cmpl-benchmark-serving17-0':
+                    logger.info(f"dp rank {self.dp_rank} waiting request: {request.request_id}")
                 
                 # 如果正在以TP模式执行  
                 if self.long_request_execution_mode:                    
@@ -568,6 +570,7 @@ class Scheduler(SchedulerInterface):
                                 self.waiting.pop_request()
                                 self.TP_wave_counter += 1
                                 self.cached_TP_requests_order.add_request(request)
+                                logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
                                 continue
 
                 # KVTransfer: skip request if still waiting for remote kvs.
@@ -766,6 +769,7 @@ class Scheduler(SchedulerInterface):
                         self.pre_executed_TP_requests[request.request_id] = request
                         self.TP_wave_counter += 1
                         self.cached_TP_requests_order.add_request(request)
+                        logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
                     if self.long_request_execution_mode:
                         TP_requests_counter += 1
                 elif request.status == RequestStatus.PREEMPTED:
@@ -985,8 +989,12 @@ class Scheduler(SchedulerInterface):
                 if merged[request.request_id][0] in STOP_STATUS_SET:
                     # remove this request from the waiting queue.
                     finished_reqs.append(request)
+                    logger.info(f"dp rank {self.dp_rank} removed TP request: {request.request_id}")
                     continue
-                
+        self.waiting.remove_requests(finished_reqs)
+        
+        for request in self.waiting:
+            if request.request_id in merged:
                 if request.request_id not in self.pre_executed_TP_requests:
                     request.append_output_token_ids(merged[request.request_id][1])
                 
@@ -1001,7 +1009,7 @@ class Scheduler(SchedulerInterface):
                     # and _all_token_ids lists.
                     request.reset_output_token_ids(merged[request.request_id][1])
         
-        self.waiting.remove_requests(finished_reqs)
+        
                     
     def _preempt_TP_requests(self, scheduled_new_reqs: list[Request]) -> None:
         self.running.extend(scheduled_new_reqs)
@@ -1031,11 +1039,9 @@ class Scheduler(SchedulerInterface):
         #    computed tokens will be adjusted in update_from_output.
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         for req_id, num_scheduled_token in num_scheduled_tokens.items():
-            try:
-                request = self.requests[req_id]
-                request.num_computed_tokens += num_scheduled_token
-            except KeyError:
-                continue
+            request = self.requests[req_id]
+            request.num_computed_tokens += num_scheduled_token
+
 
             # NOTE: _free_encoder_inputs relies on num_computed_tokens, which
             # may be updated again in _update_from_output for speculative

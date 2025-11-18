@@ -228,3 +228,5 @@ zbug.py
 models/Llama-3.1-Nemotron-8B-UltraLong-1M-Instruct/*
 models/Qwen2.5-1.5B-Instruct/*
 vllm_profile*
+
+*results.txt
