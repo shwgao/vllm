@@ -212,6 +212,7 @@ class Scheduler(SchedulerInterface):
         self.TP_wave_counter: int = 0
         self.dynamic_requests: list[Request] = []
         self.TP_execute_number: int = 10000000
+        self.waiting_switch_success_flag: Optional[str] = None
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:

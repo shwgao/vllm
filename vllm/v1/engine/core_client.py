@@ -1038,7 +1038,8 @@ class DPAsyncMPClient(AsyncMPClient):
         except RuntimeError:
             pass
         
-        self.step_count = 0 # for custom work mode(debugging)
+        self.step_count = -1 # for custom work mode(debugging)
+        self.running_mode = 'DP' # for custom work mode(debugging)
 
     def _ensure_stats_update_task(self):
         resources = self.resources
@@ -1137,7 +1138,7 @@ class DPAsyncMPClient(AsyncMPClient):
         )
         
     async def add_request_async(self, request: EngineCoreRequest) -> None:
-        work_mode = 'custom'
+        work_mode = 'manipulated'
         if work_mode == 'original':
             await self.add_request_async_original(request)
         elif work_mode == 'traffic_load':
@@ -1146,6 +1147,8 @@ class DPAsyncMPClient(AsyncMPClient):
             await self.add_request_async_based_on_request_length(request)
         elif work_mode == 'custom':
             await self.add_request_async_custom(request)
+        elif work_mode == 'manipulated':
+            await self.add_request_async_manipulated(request)
         else:
             raise ValueError(f"Invalid work mode: {work_mode}")
         
@@ -1178,36 +1181,53 @@ class DPAsyncMPClient(AsyncMPClient):
 
         request.current_wave = self.current_wave
         request.client_index = self.client_index
+     
+        # by defualt, we use all the engines
+        chosen_engines = self.core_engines
 
-        chosen_engine = self.get_core_engine_for_request_original(request)
-        max_step_count = 200
-        switch_start_steps = [int(max_step_count*x) for x in [0.0, 0.5]]
-        switch_end_steps = [int(max_step_count*x) for x in [0.75, 1.0]]
-        self.step_count += 1
+        max_step_count = 1000
+        switch_start_steps = [int(max_step_count*x) for x in [0.5]]
+        switch_end_steps = [int(max_step_count*x) for x in [0.15, 0.65]]
         
         if self.step_count in switch_start_steps:
             request.switch_running_mode_flag = True
             request.switch_mode = 'DP'
             request.switch_method = 'hard-preempt'
+            self.running_mode = 'DP'
         elif self.step_count in switch_end_steps:
             request.switch_running_mode_flag = True
             request.switch_mode = 'TP'
             request.switch_method = 'sequential'
+            self.running_mode = 'TP'
         else:
             request.switch_running_mode_flag = False
+        self.step_count += 1
+        
+        if self.running_mode == 'DP':
+            chosen_engines = self.get_core_engine_for_request_original(request)
+            
         engine_indices = []
-        engine_indices.append(self.core_engines.index(chosen_engine))
+        for engine in chosen_engines:
+            engine_indices.append(self.core_engines.index(engine))
+        
+        logger.info(f"chosen_engines: {chosen_engines} for request {request.request_id}")
+        # Set long_request_engines to indicate which engine is involved
         request.long_request_engines = engine_indices
-        request.is_long_request = False
-        request.long_request_engine_num = 1
-        # logger.info(f"chosen_engine: {chosen_engine} for request {request.request_id}")
-        to_await = self._send_input(EngineCoreRequestType.ADD, request, chosen_engine)
+        request.is_long_request = len(chosen_engines) > 1
+        request.long_request_engine_num = len(chosen_engines)
+        
+        # Send request to all engines
+        send_tasks = []
+        for engine in chosen_engines:
+            send_tasks.append(
+                self._send_input(EngineCoreRequestType.ADD, request, engine)
+            )
         if not self.engines_running:
             # Notify coordinator that we're sending a request
-            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engine))
+            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engines[0]))
             await self.first_req_send_socket.send(req_msg)
 
-        await to_await
+        await asyncio.gather(*send_tasks)
 
         self._ensure_output_queue_task()
 

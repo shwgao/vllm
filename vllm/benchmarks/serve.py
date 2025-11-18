@@ -662,6 +662,7 @@ async def benchmark(
     ramp_up_end_rps: int | None = None,
     ready_check_timeout_sec: int = 600,
     test_real_world_workload: bool = False,
+    log_output: bool = False,
 ):
     try:
         request_func = ASYNC_REQUEST_FUNCS[endpoint_type]
@@ -1092,17 +1093,18 @@ async def benchmark(
 
     await session.close()
     
-    # Write prompts and generated tokens to results.txt
-    with open("results.txt", "w", encoding="utf-8") as f:
-        for i, (request, output) in enumerate(zip(input_requests, outputs)):
-            f.write(f"=== Request {i+1} ===\n")
-            # Handle prompt which can be str or list[str]
-            prompt_str = request.prompt
-            if isinstance(prompt_str, list):
-                prompt_str = "\n".join(prompt_str)
-            f.write(f"Prompt: {prompt_str}\n")
-            f.write(f"Generated Text: {output.generated_text}\n")
-            f.write("\n")
+    if log_output:
+        # Write prompts and generated tokens to results.txt
+        with open("results.txt", "w", encoding="utf-8") as f:
+            for i, (request, output) in enumerate(zip(input_requests, outputs)):
+                f.write(f"=== Request {i+1} ===\n")
+                # Handle prompt which can be str or list[str]
+                prompt_str = request.prompt
+                if isinstance(prompt_str, list):
+                    prompt_str = "\n".join(prompt_str)
+                f.write(f"Prompt: {prompt_str}\n")
+                f.write(f"Generated Text: {output.generated_text}\n")
+                f.write("\n")
     
     return result
 
@@ -1186,6 +1188,11 @@ def add_cli_args(parser: argparse.ArgumentParser):
         "--test-real-world-workload",
         action="store_true",
         help="Test the real world workload.",
+    )
+    parser.add_argument(
+        "--log-output",
+        action="store_true",
+        help="Log the output of the benchmark.",
     )
     parser.add_argument(
         "--label",
@@ -1656,6 +1663,7 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
         ramp_up_end_rps=args.ramp_up_end_rps,
         ready_check_timeout_sec=args.ready_check_timeout_sec,
         test_real_world_workload=args.test_real_world_workload,
+        log_output=args.log_output,
     )
 
     # Save config and results to json
