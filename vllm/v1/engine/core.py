@@ -345,22 +345,22 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         
-        if self.scheduler.long_request_execution_mode:
-            # we have to sync the TP requests number across all the ranks
-            TP_requests_counter = 0
-            for request in self.scheduler.waiting:
-                if len(request.long_request_engines) > 1:
-                    TP_requests_counter += 1
-                else:
-                    break
-            TP_requests_number = ParallelConfig.sync_TP_requests_number(
-                self.dp_group,
-                self.dp_size,
-                self.dp_rank,
-                TP_requests_counter
-            )
-            self.scheduler.TP_execute_number = TP_requests_number
-            # logger.info(f"dp rank {self.dp_rank} TP requests number: {TP_requests_number}")
+        # if self.scheduler.long_request_execution_mode:
+        #     # we have to sync the TP requests number across all the ranks
+        #     TP_requests_counter = 0
+        #     for request in self.scheduler.waiting:
+        #         if len(request.long_request_engines) > 1:
+        #             TP_requests_counter += 1
+        #         else:
+        #             break
+        #     TP_requests_number = ParallelConfig.sync_TP_requests_number(
+        #         self.dp_group,
+        #         self.dp_size,
+        #         self.dp_rank,
+        #         TP_requests_counter
+        #     )
+        #     self.scheduler.TP_execute_number = TP_requests_number
+        #     # logger.info(f"dp rank {self.dp_rank} TP requests number: {TP_requests_number}")
 
         # logger.info(f"dp rank {self.dp_rank} scheduling")
         scheduler_output = self.scheduler.schedule()
@@ -1229,12 +1229,23 @@ class DPEngineCoreProc(EngineCoreProc):
         """Core busy loop of the EngineCore for data parallel case."""
 
         # Loop until process is sent a SIGINT or SIGTERM
+        loop_counter = 0
         while True:
+            loop_counter += 1
             # 1) Poll the input queue until there is work to do.
             self._process_input_queue()
 
             # 2) Step the engine core.
+            # Record time for _process_engine_step
+            should_log = (loop_counter % 30 == 0)
+            if should_log:
+                process_engine_step_start = time.perf_counter()
+            
             executed = self._process_engine_step()
+            
+            if should_log:
+                process_engine_step_time = time.perf_counter() - process_engine_step_start
+            
             self._maybe_publish_request_counts()
 
             local_unfinished_reqs = self.scheduler.has_unfinished_requests()
@@ -1253,9 +1264,20 @@ class DPEngineCoreProc(EngineCoreProc):
             # self.engines_running = self._has_global_unfinished_reqs(
             #     local_unfinished_reqs
             # )
+            # Record time for _has_global_unfinished_reqs_simple
+            if should_log:
+                has_global_unfinished_reqs_start = time.perf_counter()
+            
             self.engines_running = self._has_global_unfinished_reqs_simple(
                 local_unfinished_reqs
             )
+            
+            if should_log:
+                has_global_unfinished_reqs_time = time.perf_counter() - has_global_unfinished_reqs_start
+                logger.info(
+                    f"[Step {loop_counter}] _process_engine_step: {process_engine_step_time*1000:.2f}ms, "
+                    f"_has_global_unfinished_reqs_simple: {has_global_unfinished_reqs_time*1000:.2f}ms"
+                )
             
             # 2.5) Check if long request will be executed next step and
             # TODO: check which engine should start the long request execution.
