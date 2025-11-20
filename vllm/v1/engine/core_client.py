@@ -1138,7 +1138,7 @@ class DPAsyncMPClient(AsyncMPClient):
         )
         
     async def add_request_async(self, request: EngineCoreRequest) -> None:
-        work_mode = 'manipulated'
+        work_mode = 'tp_mode'
         if work_mode == 'original':
             await self.add_request_async_original(request)
         elif work_mode == 'traffic_load':
@@ -1147,6 +1147,8 @@ class DPAsyncMPClient(AsyncMPClient):
             await self.add_request_async_based_on_request_length(request)
         elif work_mode == 'custom':
             await self.add_request_async_custom(request)
+        elif work_mode == 'tp_mode':
+            await self.add_request_async_tp_mode(request)
         elif work_mode == 'manipulated':
             await self.add_request_async_manipulated(request)
         else:
@@ -1204,7 +1206,7 @@ class DPAsyncMPClient(AsyncMPClient):
         self.step_count += 1
         
         if self.running_mode == 'DP':
-            chosen_engines = self.get_core_engine_for_request_original(request)
+            chosen_engines = [self.get_core_engine_for_request_original(request)]
             
         engine_indices = []
         for engine in chosen_engines:
@@ -1269,6 +1271,38 @@ class DPAsyncMPClient(AsyncMPClient):
             await self.first_req_send_socket.send(req_msg)
 
         self._ensure_output_queue_task()
+
+    async def add_request_async_tp_mode(self, request: EngineCoreRequest) -> None:
+        self._ensure_stats_update_task()
+        self.step_count += 1
+
+        engine_indices = [0,1]
+        chosen_engine = [self.core_engines[eng_index] for eng_index in engine_indices]
+        if self.step_count in [0]:
+            request.switch_running_mode_flag = True
+            request.switch_mode = 'TP'
+            request.switch_method = 'sequential'
+        
+        request.long_request_engines = engine_indices
+        request.is_long_request = True
+        request.long_request_engine_num = len(engine_indices)
+
+        send_tasks = []
+        # logger.info(f"chosen_engine: {chosen_engine} for request {request.request_id}")
+        for engine in chosen_engine:
+            send_tasks.append(
+                self._send_input(EngineCoreRequestType.ADD, request, engine)
+            )
+        await asyncio.gather(*send_tasks)
+        
+        if not self.engines_running:
+            # Notify coordinator that we're sending a request
+            # Use the primary engine (chosen engine) for coordinator notification
+            req_msg = msgspec.msgpack.encode(("FIRST_REQ", chosen_engine[0]))
+            await self.first_req_send_socket.send(req_msg)
+
+        self._ensure_output_queue_task()
+        
 
     async def add_request_async_based_on_traffic_load(self, request: EngineCoreRequest) -> None:
         # In this mode, we will send the request to all the engines, but only the chosen engine

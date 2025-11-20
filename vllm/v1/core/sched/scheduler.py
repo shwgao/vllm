@@ -1458,7 +1458,7 @@ class Scheduler(SchedulerInterface):
         if self.waiting_switch_success_flag == 'TP' and not self.last_request_before_switch:
             if self.switch_method == 'sequential':
                 self.want_to_execute_long_request = True
-                self.waiting_switch_success_flag = None
+                # self.waiting_switch_success_flag = None
 
         # # Shouwei's note: If the long request is finished, reset the state
         # if self.last_request_need_to_switch in self.finished_req_ids:

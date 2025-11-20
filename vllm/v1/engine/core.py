@@ -211,6 +211,8 @@ class EngineCore:
         self.step_fn = (
             self.step if self.batch_queue is None else self.step_with_batch_queue
         )
+        
+        self.step_count = 0
 
     def _initialize_kv_caches(
         self, vllm_config: VllmConfig
@@ -337,7 +339,7 @@ class EngineCore:
         Returns tuple of outputs and a flag indicating whether the model
         was executed.
         """
-
+        self.step_count += 1
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         if not self.scheduler.has_requests():
@@ -364,7 +366,7 @@ class EngineCore:
         scheduler_output = self.scheduler.schedule()
         
         for request in scheduler_output.scheduled_new_reqs:
-            logger.info(f"dp rank {self.dp_rank} scheduled new requests: {request.req_id}")
+            logger.info(f"dp rank {self.dp_rank} at step {self.step_count} scheduled new requests: {request.req_id}")
         # logger.info(f"dp rank {self.dp_rank} scheduler length of running queue: {len(self.scheduler.running)}")
         # logger.info(f"dp rank {self.dp_rank} scheduler length of waiting queue: {len(self.scheduler.waiting)}")
         
@@ -1315,6 +1317,7 @@ class DPEngineCoreProc(EngineCoreProc):
             self.scheduler.pre_executed_TP_requests = {}
             self.scheduler.cached_TP_requests_order.clear()
             self.scheduler.switch_dtp_group_state_already = False
+            self.scheduler.waiting_switch_success_flag = None
         
         return has_unfinished
 
