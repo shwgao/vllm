@@ -345,39 +345,26 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         
-        # if self.scheduler.long_request_execution_mode:
-        #     # we have to sync the TP requests number across all the ranks
-        #     TP_requests_counter = 0
-        #     for request in self.scheduler.waiting:
-        #         if len(request.long_request_engines) > 1:
-        #             TP_requests_counter += 1
-        #         else:
-        #             break
-        #     TP_requests_number = ParallelConfig.sync_TP_requests_number(
-        #         self.dp_group,
-        #         self.dp_size,
-        #         self.dp_rank,
-        #         TP_requests_counter
-        #     )
-        #     self.scheduler.TP_execute_number = TP_requests_number
-        #     # logger.info(f"dp rank {self.dp_rank} TP requests number: {TP_requests_number}")
-
-        # logger.info(f"dp rank {self.dp_rank} scheduling")
+        if self.scheduler.long_request_execution_mode:
+            # we have to sync the TP requests number across all the ranks
+            TP_requests_counter = 0
+            for request in self.scheduler.waiting:
+                if len(request.long_request_engines) > 1:
+                    TP_requests_counter += 1
+                else:
+                    break
+            TP_requests_number = ParallelConfig.sync_TP_requests_number(
+                self.dp_group,
+                self.dp_size,
+                self.dp_rank,
+                TP_requests_counter
+            )
+            self.scheduler.TP_execute_number = TP_requests_number
+                
         scheduler_output = self.scheduler.schedule()
         
         for request in scheduler_output.scheduled_new_reqs:
             logger.info(f"dp rank {self.dp_rank} at step {self.step_count} scheduled new requests: {request.req_id}")
-        # logger.info(f"dp rank {self.dp_rank} scheduler length of running queue: {len(self.scheduler.running)}")
-        # logger.info(f"dp rank {self.dp_rank} scheduler length of waiting queue: {len(self.scheduler.waiting)}")
-        
-        # try:
-        #     logger.info(f"dp rank {self.dp_rank} cached request: {scheduler_output.scheduled_cached_reqs.req_ids}")
-        # except Exception as e:
-        #     logger.info(f"dp rank {self.dp_rank} cached request: None")
-        # try:
-        #     logger.info(f"dp rank {self.dp_rank} new scheduled request: {scheduler_output.scheduled_new_reqs[0].req_id}")
-        # except Exception as e:
-        #     logger.info(f"dp rank {self.dp_rank} new scheduled request: None")
         
         if scheduler_output.set_dtp_group_status:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
@@ -1229,22 +1216,13 @@ class DPEngineCoreProc(EngineCoreProc):
         """Core busy loop of the EngineCore for data parallel case."""
 
         # Loop until process is sent a SIGINT or SIGTERM
-        loop_counter = 0
         while True:
-            loop_counter += 1
             # 1) Poll the input queue until there is work to do.
             self._process_input_queue()
 
             # 2) Step the engine core.
             # Record time for _process_engine_step
-            should_log = (loop_counter % 30 == 0)
-            if should_log:
-                process_engine_step_start = time.perf_counter()
-            
             executed = self._process_engine_step()
-            
-            if should_log:
-                process_engine_step_time = time.perf_counter() - process_engine_step_start
             
             self._maybe_publish_request_counts()
 
@@ -1257,7 +1235,6 @@ class DPEngineCoreProc(EngineCoreProc):
                 # We are in a running state and so must execute a dummy pass
                 # if the model didn't execute any ready requests.
                 self.execute_dummy_batch()
-            
 
             # 3) All-reduce operation to determine global unfinished reqs.
             # TODO: sync the want_to_execute_long_request across all the DP ranks here.
@@ -1265,19 +1242,9 @@ class DPEngineCoreProc(EngineCoreProc):
             #     local_unfinished_reqs
             # )
             # Record time for _has_global_unfinished_reqs_simple
-            if should_log:
-                has_global_unfinished_reqs_start = time.perf_counter()
-            
             self.engines_running = self._has_global_unfinished_reqs_simple(
                 local_unfinished_reqs
             )
-            
-            if should_log:
-                has_global_unfinished_reqs_time = time.perf_counter() - has_global_unfinished_reqs_start
-                logger.info(
-                    f"[Step {loop_counter}] _process_engine_step: {process_engine_step_time*1000:.2f}ms, "
-                    f"_has_global_unfinished_reqs_simple: {has_global_unfinished_reqs_time*1000:.2f}ms"
-                )
             
             # 2.5) Check if long request will be executed next step and
             # TODO: check which engine should start the long request execution.
@@ -1313,7 +1280,7 @@ class DPEngineCoreProc(EngineCoreProc):
     
     def _has_global_unfinished_reqs_simple(self, local_unfinished: bool) -> bool:
         self.step_counter += 1
-        if self.step_counter % 8 != 0:
+        if self.step_counter % 32 != 0:
             return True
 
         has_unfinished, tensor = ParallelConfig.has_unfinished_dp_and_switch_mode(

@@ -382,9 +382,9 @@ class Scheduler(SchedulerInterface):
                     self.encoder_cache_manager.allocate(request, i)
                 encoder_compute_budget = new_encoder_compute_budget
             
-            # if is in the long request mode, we only schedule one request per time
-            if self.long_request_execution_mode:
-                break
+            # # if is in the long request mode, we only schedule one request per time
+            # if self.long_request_execution_mode:
+            #     break
 
         # Record the LoRAs in scheduled_running_reqs
         scheduled_loras: set[int] = set()
