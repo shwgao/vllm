@@ -186,7 +186,7 @@ class Request:
             self.block_hashes.extend(self.get_hash_new_full_blocks())
             
     def reset_output_token_ids(self, token_ids: list[int]) -> None:
-        self._output_token_ids = []
+        self._output_token_ids.clear()
         self.prompt_token_ids.extend(token_ids)
         self.num_prompt_tokens += len(token_ids)
 

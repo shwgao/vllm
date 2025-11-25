@@ -916,7 +916,7 @@ class EngineCoreProc(EngineCore):
         if request_type == EngineCoreRequestType.ADD:
             req, request_wave = request
             self.add_request(req, request_wave)
-            logger.info(f"dp rank {self.dp_rank} request: {req.request_id} added")
+            # logger.info(f"dp rank {self.dp_rank} request: {req.request_id} added")
         elif request_type == EngineCoreRequestType.ABORT:
             self.abort_requests(request)
         elif request_type == EngineCoreRequestType.UTILITY:

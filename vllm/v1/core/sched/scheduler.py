@@ -406,13 +406,8 @@ class Scheduler(SchedulerInterface):
             while self.waiting and token_budget > 0:
                 if len(self.running) == self.max_num_running_reqs:
                     break
-                
-                if TP_requests_counter >= self.TP_execute_number:
-                    break
 
                 request = self.waiting.peek_request()
-                if request.request_id == 'cmpl-benchmark-serving17-0':
-                    logger.info(f"dp rank {self.dp_rank} waiting request: {request.request_id}")
                 
                 # 如果正在以TP模式执行  
                 if self.long_request_execution_mode:                    
@@ -425,13 +420,15 @@ class Scheduler(SchedulerInterface):
                             self.waiting_switch_success_flag = 'DP'
                             # 如果切换方式为直接抢占，那么我们就需要将正在以TP模式运行的请求抢占，然后切换为DP模式
                             if request.switch_method == 'hard-preempt':
-                                self.running.extend(scheduled_new_reqs)
+                                # self.running.extend(scheduled_new_reqs)
+                                logger.info(f"---------------dp rank {self.dp_rank} switch TP -> DP------------------")
                                 self.waiting.pop_request()
                                 self.running.append(request)
                                 preempted = create_request_queue(self.policy)
                                 for i, req in enumerate(self.running):
                                     # 我们将这些request都转换成DP模式，每个request都分配一个DP rank
                                     new_engine_ids = self.long_request_engines[i%len(self.long_request_engines)]
+                                    # logger.info(f"dp rank {self.dp_rank} preempting request: {req.request_id} to engine: {new_engine_ids}")
                                     if self.dp_rank != new_engine_ids:
                                         continue
                                     req.long_request_engines = [new_engine_ids]
@@ -441,6 +438,7 @@ class Scheduler(SchedulerInterface):
                                     # token_budget += num_scheduled_tokens[req.request_id]
                                     # req_to_new_blocks.pop(req.request_id)
                                     # num_scheduled_tokens.pop(req.request_id)
+                                    req.reset_output_token_ids(req._output_token_ids)
                                     self.kv_cache_manager.free(req)
                                     req.status = RequestStatus.WAITING
                                     req.num_computed_tokens = 0
@@ -448,10 +446,14 @@ class Scheduler(SchedulerInterface):
                                     if self.log_stats:
                                         req.record_event(EngineCoreEventType.PREEMPTED, time.monotonic())
                                     preempted.add_request(req)
+                                    
+                                
+                                self.kv_cache_config_reset()
 
                                 scheduled_new_reqs = []
                                 scheduled_running_reqs = []   
-                                num_scheduled_tokens = {}                                 
+                                num_scheduled_tokens = {}
+                                num_new_tokens = 0                                 
                                 self.waiting.prepend_requests(preempted)
                                 request.switch_running_mode_flag = False
                                 self.running = []
@@ -463,6 +465,7 @@ class Scheduler(SchedulerInterface):
                                 self.running_parallel_engines = [self.dp_rank]
                                 self.waiting_switch_success_flag = None
                                 self.TP_execute_number = 10000000
+                                token_budget = self.max_num_scheduled_tokens
                                 
                                 continue
                             # 如果切换方式为顺序执行，那么我们就需要确定这些正在执行的request都执行完了才切换，
@@ -573,7 +576,11 @@ class Scheduler(SchedulerInterface):
                                 self.cached_TP_requests_order.add_request(request)
                                 logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
                                 continue
-
+                
+                if self.long_request_execution_mode:
+                    if TP_requests_counter >= self.TP_execute_number:
+                        break
+                
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
                     is_ready = self._update_waiting_for_remote_kv(request)
@@ -913,6 +920,18 @@ class Scheduler(SchedulerInterface):
         for i, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
             manager.block_size *= dtp_size
     
+    def kv_cache_config_reset(self,):
+        dtp_size = len(self.long_request_engines)
+        current_spec = self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec
+        new_spec = replace(current_spec, 
+                           block_size=current_spec.block_size // dtp_size,
+                           num_kv_heads=current_spec.num_kv_heads * dtp_size)
+        self.kv_cache_manager.kv_cache_config.kv_cache_groups[0].kv_cache_spec = new_spec
+        self.kv_cache_manager.kv_cache_config.change_status_for_dtp = False
+        self.block_size //= dtp_size
+        for _, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
+            manager.block_size //= dtp_size
+    
     def _schedule_long_request_exclusive(self) -> bool:
         """Schedule only the long request, preempting all other running requests."""
         set_dtp_group_status = False
@@ -937,6 +956,7 @@ class Scheduler(SchedulerInterface):
             
         # Set kv cache config
         if not self.set_kv_cache_config_already:
+            logger.info(f"---------------dp rank {self.dp_rank} DP --> TP------------------")
             self.kv_cache_config_set()
             self.set_kv_cache_config_already = True
           

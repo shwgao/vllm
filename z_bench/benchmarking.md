@@ -21,6 +21,8 @@ vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /ccsopen/
 
 vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model openai/gpt-oss-20b --num-prompts 200 --test-real-world-workload --port 8009 --request-rate 1
 
+vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --num-prompts 1000 --test-real-world-workload --port 8000 --request-rate 1
+
 # /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 # /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
