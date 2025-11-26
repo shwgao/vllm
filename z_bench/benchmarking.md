@@ -23,6 +23,10 @@ vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /nfs/stak
 
 vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --num-prompts 1000 --test-real-world-workload --port 8000 --request-rate 1
 
+vllm bench serve --backend vllm --dataset-name hf --dataset-path THUDM/LongBench-v2 --model meta-llama/Meta-Llama-3-70B-Instruct --num-prompts 1000  --port 8006 --request-rate 1000 --longbench-length-filter short
+
+vllm bench serve --backend vllm --dataset-name random --model meta-llama/Meta-Llama-3-70B-Instruct --num-prompts 1000  --port 8006 --request-rate 1000 --random-input-len 2000 --random-output-len 256 --random-range-ratio 0.5
+
 # /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 # /nfs/stak/users/gaosho/hpc-share/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json
 ```
