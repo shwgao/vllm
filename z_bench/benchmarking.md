@@ -1,7 +1,7 @@
 ## Benchmarking throughput
 
 ```bash
-vllm bench throughput --model openai/gpt-oss-20b --input-len 2000 --output-len 1 --enforce-eager --dataset-name random --num-prompts 500 --random-range-ratio 0 --max-num-batched-tokens 8192 --data-parallel-size 2 --tensor-parallel-size 1
+HF_HUB_OFFLINE=1 vllm bench throughput --model meta-llama/Meta-Llama-3-70B-Instruct --input-len 2000 --output-len 256 --enforce-eager --dataset-name random --num-prompts 1000 --random-range-ratio 0 --max-num-batched-tokens 8192 --data-parallel-size 4 --tensor-parallel-size 2
 ```
 
 ## Benchmarking latency
