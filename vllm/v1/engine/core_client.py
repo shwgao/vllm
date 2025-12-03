@@ -1189,7 +1189,7 @@ class DPAsyncMPClient(AsyncMPClient):
 
         max_step_count = 1000
         switch_start_steps = [int(max_step_count*x) for x in []]
-        switch_end_steps = [int(max_step_count*x) for x in [0.55]]
+        switch_end_steps = [int(max_step_count*x) for x in [0.25]]
         
         if self.step_count in switch_start_steps:
             request.switch_running_mode_flag = True

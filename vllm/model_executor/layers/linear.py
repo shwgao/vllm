@@ -307,16 +307,20 @@ class LinearBase(CustomOp):
         Reshard the weight matrix if the DTP group is used.
         If the DTP group is not used, do nothing.
         When outside the context, the weight matrix is not resharded.
-        The shape of the model weight matrix is (input_size, output_size).
+        The weight matrix shape can be either (input_size, output_size) or 
+        (output_size, input_size), depending on the quantization method.
         For ColumnParallelLinear and RowParallelLinear, the weight matrix is 
         sharded along different dimensions.
         """
         if not get_dtp_group_state():
             if self.shard_status:
-                self.weight = self.old_weight
+                # Restore original weight and bias (no copy, just reassign reference)
+                self.weight.data = self.old_weight
+                if self.bias is not None:
+                    self.bias.data = self.old_bias
                 self.shard_status = False
                 self.old_weight = None
-                self.bias = self.old_bias
+                self.old_bias = None
             yield
             return
         
@@ -328,8 +332,53 @@ class LinearBase(CustomOp):
         dtp_size = len(self.long_request_engine_ids)
         dp_rank = get_dp_group().rank_in_group
         dp_index = self.long_request_engine_ids.index(dp_rank)
-        self.old_weight = self.weight
-        self.old_bias = self.bias
+        # Save reference to original weight data (no copy)
+        self.old_weight = self.weight.data
+        if self.bias is not None:
+            self.old_bias = self.bias.data
+        else:
+            self.old_bias = None
+        
+        # Get the input_dim and output_dim from the weight parameter
+        # These attributes indicate which dimension corresponds to input/output
+        output_dim = getattr(self.weight, "output_dim", None)
+        input_dim = getattr(self.weight, "input_dim", None)
+        
+        # If attributes are not available, infer from weight shape and layer type
+        # Default assumption: weight shape is (output_size, input_size) for most cases
+        if output_dim is None or input_dim is None:
+            weight_shape = self.old_weight.shape
+            if len(weight_shape) == 2:
+                # Try to infer from layer type and shape
+                if isinstance(self, ColumnParallelLinear):
+                    # For ColumnParallelLinear, typically weight is (out, in)
+                    # but we need to check against expected sizes
+                    expected_out = sum(self.output_partition_sizes)
+                    expected_in = self.input_size_per_partition
+                    if weight_shape[0] == expected_out and weight_shape[1] == expected_in:
+                        output_dim, input_dim = 0, 1
+                    elif weight_shape[0] == expected_in and weight_shape[1] == expected_out:
+                        output_dim, input_dim = 1, 0
+                    else:
+                        # Default assumption: (out, in)
+                        output_dim, input_dim = 0, 1
+                elif isinstance(self, RowParallelLinear):
+                    # For RowParallelLinear, typically weight is (out, in)
+                    expected_out = self.output_size_per_partition
+                    expected_in = self.input_size_per_partition
+                    if weight_shape[0] == expected_out and weight_shape[1] == expected_in:
+                        output_dim, input_dim = 0, 1
+                    elif weight_shape[0] == expected_in and weight_shape[1] == expected_out:
+                        output_dim, input_dim = 1, 0
+                    else:
+                        # Default assumption: (out, in)
+                        output_dim, input_dim = 0, 1
+                else:
+                    # Default assumption: (out, in)
+                    output_dim, input_dim = 0, 1
+            else:
+                # For non-2D weights, use default
+                output_dim, input_dim = 0, 1
         
         # original weight shape: [6144, 4096], and the first dimension 6144 is 
         # composed of Q, K, V: [4096, 1024, 1024].
@@ -356,21 +405,32 @@ class LinearBase(CustomOp):
                 shard_start_indices.append(shard_start)
                 shard_end_indices.append(shard_end)
             
-            # Create the sharded weight by concatenating the shards from each partition
-            sharded_weights = []
-            sharded_biases = []
-            for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
-                sharded_weights.append(self.old_weight[start_idx:end_idx, :])
-                if not self.skip_bias_add and self.bias:
-                    sharded_biases.append(self.old_bias[start_idx:end_idx])
+            # Check if using quantization
+            is_quantized = (self.quant_config is not None and 
+                          not isinstance(self.quant_method, UnquantizedLinearMethod))
             
-            # Concatenate all sharded weights along the first dimension
-            new_weight = torch.cat(sharded_weights, dim=0)
-        
-            self.weight = Parameter(new_weight)
+            # For non-quantized: use basic slicing
+            sharded_weights = []
+            for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
+                if output_dim == 0:
+                    sharded_weights.append(self.old_weight[start_idx:end_idx, :])
+                else:
+                    sharded_weights.append(self.old_weight[:, start_idx:end_idx])
+            
+            if is_quantized:
+                new_weight = torch.cat(sharded_weights, dim=output_dim).t().contiguous().t()
+            else:
+                new_weight = torch.cat(sharded_weights, dim=output_dim)
+            
+            # Single copy: directly assign new_weight to weight.data
+            with torch.no_grad():
+                self.weight.data = new_weight.to(self.weight.data.dtype).to(self.weight.data.device)
             
             # bias is also sharded
             if not self.skip_bias_add and self.bias:
+                sharded_biases = []
+                for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
+                    sharded_biases.append(self.old_bias[start_idx:end_idx])
                 new_bias = torch.cat(sharded_biases, dim=0)
                 self.bias = Parameter(new_bias)
             
@@ -388,28 +448,43 @@ class LinearBase(CustomOp):
                 import numpy as np
                 np.savetxt(weight_file, weight_cpu, delimiter=',', fmt='%.6f')
                 logger.info(f"Weight saved to {weight_file}, shape: {weight_cpu.shape}")
-        
-        # elif isinstance(self, ColumnParallelLinear):
-        #     original_partition = self.output_size_per_partition # [4096, 1024, 1024]
-        #     shard_partition_size = divide(original_partition, dtp_size)
-        #     shard_start = dp_index * shard_partition_size
-        #     shard_end = (dp_index + 1) * shard_partition_size
-        #     self.weight = Parameter(self.old_weight[shard_start:shard_end, :])
             
         elif isinstance(self, RowParallelLinear):
-            # For RowParallelLinear, we need to shard along the second dimension
-            original_partition = self.input_size_per_partition # [4096, 1024, 1024]
+            # For RowParallelLinear, we need to shard along the input_dim dimension
+            original_partition = self.input_size_per_partition
             shard_size = divide(original_partition, dtp_size)
             shard_start = dp_index * shard_size
             shard_end = (dp_index + 1) * shard_size
-            self.weight = Parameter(self.old_weight[:, shard_start:shard_end])
+            
+            # Check if using quantization
+            is_quantized = (self.quant_config is not None and 
+                          not isinstance(self.quant_method, UnquantizedLinearMethod))
+            
+            if input_dim == 1:
+                sharded_weight = self.old_weight[:, shard_start:shard_end]
+            else:
+                sharded_weight = self.old_weight[shard_start:shard_end, :]
+                
+            if is_quantized:
+                sharded_weight = sharded_weight.t().contiguous().t()
+            
+            # Single copy: directly assign sharded_weight to weight.data
+            with torch.no_grad():
+                self.weight.data = sharded_weight.to(self.weight.data.dtype).to(self.weight.data.device)
         else:
             raise ValueError(f"Unimplemented DTP layer type: {type(self)}")
 
         try:
             yield
         finally:
-            pass
+            # Restore original weight and bias when exiting the context (no copy, just reassign reference)
+            if self.shard_status:
+                self.weight.data = self.old_weight
+                if self.bias is not None:
+                    self.bias.data = self.old_bias
+                self.shard_status = False
+                self.old_weight = None
+                self.old_bias = None
 
 
 @CustomOp.register("replicated_linear")
@@ -682,7 +757,11 @@ class ColumnParallelLinear(LinearBase):
         assert self.quant_method is not None
         with self.resharding():
             bias = self.bias if not self.skip_bias_add else None
-            output_parallel = self.quant_method.apply(self, input_, bias)
+            try:
+                output_parallel = self.quant_method.apply(self, input_, bias)
+            except Exception as e:
+                logger.error(f"Error in ColumnParallelLinear forward: {e}")
+                raise e
 
         if self.gather_output and self.tp_size > 1:
             # All-gather across the partitions.
