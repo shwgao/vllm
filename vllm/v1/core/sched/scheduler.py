@@ -574,7 +574,7 @@ class Scheduler(SchedulerInterface):
                                 self.waiting.pop_request()
                                 self.TP_wave_counter += 1
                                 self.cached_TP_requests_order.add_request(request)
-                                logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
+                                # logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
                                 continue
                 
                 if self.long_request_execution_mode:
@@ -777,7 +777,7 @@ class Scheduler(SchedulerInterface):
                         self.pre_executed_TP_requests[request.request_id] = request
                         self.TP_wave_counter += 1
                         self.cached_TP_requests_order.add_request(request)
-                        logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
+                        # logger.info(f"dp rank {self.dp_rank} cached_TP_requests_order added TP request: {request.request_id}")
                     if self.long_request_execution_mode:
                         TP_requests_counter += 1
                 elif request.status == RequestStatus.PREEMPTED:
@@ -1005,13 +1005,16 @@ class Scheduler(SchedulerInterface):
         # restore the waiting queue to want to execute the TP request.
         self.waiting.prepend_requests(self.cached_TP_requests_order)
         finished_reqs = []
+        count = 0
         for request in self.waiting:
             if request.request_id in merged:
                 if merged[request.request_id][0] in STOP_STATUS_SET:
                     # remove this request from the waiting queue.
                     finished_reqs.append(request)
-                    logger.info(f"dp rank {self.dp_rank} removed TP request: {request.request_id}")
+                    # logger.info(f"dp rank {self.dp_rank} removed TP request: {request.request_id}")
+                    count += 1
                     continue
+        logger.info(f"dp rank {self.dp_rank} removed {count} TP requests")
         self.waiting.remove_requests(finished_reqs)
         
         for request in self.waiting:
@@ -1469,7 +1472,7 @@ class Scheduler(SchedulerInterface):
             eco.scheduler_stats = stats
             
         for req_id in self.finished_req_ids:
-            logger.info(f"dp rank {self.parallel_config.data_parallel_rank} finished request: {req_id}")
+            # logger.info(f"dp rank {self.parallel_config.data_parallel_rank} finished request: {req_id}")
             self.last_request_before_switch.discard(req_id)
         # for request in self.cached_TP_requests_order:
         #     if request.request_id in self.finished_req_ids:

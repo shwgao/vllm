@@ -363,8 +363,8 @@ class EngineCore:
                 
         scheduler_output = self.scheduler.schedule()
         
-        for request in scheduler_output.scheduled_new_reqs:
-            logger.info(f"dp rank {self.dp_rank} at step {self.step_count} scheduled new requests: {request.req_id}")
+        # for request in scheduler_output.scheduled_new_reqs:
+        #     logger.info(f"dp rank {self.dp_rank} at step {self.step_count} scheduled new requests: {request.req_id}")
         
         if scheduler_output.set_dtp_group_status:
             # logger.info(f"Engine {self.engine_index} switching DTP group state to True")
