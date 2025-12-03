@@ -1458,6 +1458,87 @@ def add_more_parallel_groups(
     # number if DP groups, also we need to give an interface to user to select which
     # DP groups to merge into a dtp group. So, we need to enumerate all possible dtp groups.
     # Use the merged DP ranks as the key, the value is the dtp group(coordinator).
+    number_dp_can_merge = [data_parallel_size]
+    for number_dp in number_dp_can_merge:
+        if number_dp > data_parallel_size:
+            break
+        group_dp_list = list(itertools.combinations(range(data_parallel_size), number_dp))
+        group_ranks_list = [all_ranks[:, group_dp_list[i], :, :].reshape(-1, number_dp * tensor_model_parallel_size).tolist() for i in range(len(group_dp_list))]
+        
+        for i in range(len(group_ranks_list)):
+            group_ranks = group_ranks_list[i]
+            
+            # # Merge all DP x TP participants per pipeline stage into one communicator
+            # # so each PP stage owns a cross-DP TP communicator.
+            # group_ranks = all_ranks.transpose(1, 2).reshape(
+            #     -1, pipeline_model_parallel_size, data_parallel_size * tensor_model_parallel_size)
+            # group_ranks_list: list[list[int]] = []
+            # for slab in group_ranks.unbind(0):  # each slab: [PP, DP*TP]
+            #     for pp_row in slab.unbind(0):   # each row: [DP*TP]
+            #         group_ranks_list.append(pp_row.tolist())
+
+            # Use the correct local GPU index for binding device communicators.
+            local_rank = get_world_group().local_rank
+            assert 0 <= local_rank < torch.cuda.device_count(), (
+                f"Invalid local_rank {local_rank} with device_count={torch.cuda.device_count()}")
+
+            # if rank in group_ranks[0]:
+            _DTP[group_dp_list[i]] = init_model_parallel_group(
+                group_ranks,
+                local_rank,
+                backend,
+                use_message_queue_broadcaster=True,
+                group_name="dtp_{}".format(group_dp_list[i])
+            )
+
+            logger.info(
+                "Created _DTP groups. Current rank: %s, Current DTP group: %s",
+                rank,
+                group_ranks,
+            )
+  
+def add_more_parallel_groups_v0(
+    tensor_model_parallel_size: int,
+    pipeline_model_parallel_size: int,
+    backend: str | None = None,
+) -> None:
+    """Helper to add more parallel groups.
+    Initially, all the parallel groups are initialized based on DP. 
+    Now, I need to add a extra parallel group based on TP, so that,
+    I can switch the parallel group dynamically during runtime.
+    all TP groups of all DP groups are merged into a single TP group, called _DTP.
+    """
+    # ensure model parallel is initialized
+    assert model_parallel_is_initialized(), (
+        "Model parallel groups must be initialized before adding more groups")
+    
+    # get current config
+    world_size = torch.distributed.get_world_size()
+    rank = torch.distributed.get_rank()
+    backend = backend or torch.distributed.get_backend(get_world_group().device_group)
+    
+    # get data parallel size
+    data_parallel_size = 1
+    from vllm.config import get_current_vllm_config
+    config = get_current_vllm_config()
+    if config is not None:
+        data_parallel_size = config.parallel_config.data_parallel_size
+    
+    # check if _DTP groups already exist
+    global _DTP
+    if _DTP is not None:
+        logger.warning("_DTP groups already exist, skipping creation")
+        return
+    
+    all_ranks = torch.arange(world_size).reshape(
+        -1, data_parallel_size, pipeline_model_parallel_size,
+        tensor_model_parallel_size)
+    
+    _DTP = {}
+    # we need to enumerate all possible dtp groups, because we could merge different
+    # number if DP groups, also we need to give an interface to user to select which
+    # DP groups to merge into a dtp group. So, we need to enumerate all possible dtp groups.
+    # Use the merged DP ranks as the key, the value is the dtp group(coordinator).
     number_dp_can_merge = [2, 4, 8]
     for number_dp in number_dp_can_merge:
         if number_dp > data_parallel_size:

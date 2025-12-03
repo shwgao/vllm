@@ -1,20 +1,20 @@
 model="llama-3-8b"
-model="llama-3-70b"
 model="gpt-oss-20b"
+model="llama-3-70b"
 mode="ours-DP-2"
-# mode="vanilla-DP"
+mode="vanilla-DP"
 # mode="vanilla-TP"
-TP=1
-DP=2
-MAX_MODEL_LEN=520000 
-OUTPUT_LEN=1
+TP=2
+DP=4
+MAX_MODEL_LEN=131000 
+OUTPUT_LEN=256
 
 # parameters list
 chunk_prefill_list=(8192)
-input_len_list=(128000) # (1000 2000 4000 8000 16000 32000 64000 128000)
-request_rate_list=(300)
+input_len_list=(1000 2000 4000 8000 16000 32000 64000 128000)
+request_rate_list=(1000)
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 
 if [ "$model" == "llama-3-8b" ]; then
@@ -25,8 +25,8 @@ elif [ "$model" == "gpt-oss-20b" ]; then
     MODEL="openai/gpt-oss-20b"
 fi
 
-RESULTS_FILE="bench_throughput-${mode}_${TP}tp_${DP}dp_random_4gpus_${model}.csv" 
-OUTPUT_FILE="bench_throughput-${mode}_${TP}tp_${DP}dp_random_4gpus_${model}.txt" 
+RESULTS_FILE="bench_throughput-${mode}_${TP}tp_${DP}dp_random_8gpus_${model}.csv" 
+OUTPUT_FILE="bench_throughput-${mode}_${TP}tp_${DP}dp_random_8gpus_${model}.txt" 
 
 # set vllm path
 # VLLM_PATH="/nfs/hpc/share/gaosho/conda_envs/arctic-inference/bin/vllm"
@@ -51,9 +51,9 @@ start_server() {
         --host $SERVER_HOST \
         --trust-remote-code \
         --enforce-eager \
-        --max-num-seqs 100 \
+        --max-num-seqs 1000 \
         --no-enable-prefix-caching \
-        --gpu-memory-utilization 0.9 \
+        --gpu-memory-utilization 0.8 \
         --max-num-batched-tokens $1 > server.log 2>&1 &
     
     SERVER_PID=$!

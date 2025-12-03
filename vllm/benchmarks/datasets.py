@@ -1543,6 +1543,14 @@ def add_dataset_parser(parser: FlexibleArgumentParser):
         help="Output length for each request. Overrides the output lengths "
         "from the sampled HF dataset.",
     )
+    hf_group.add_argument(
+        "--longbench-length-filter",
+        type=str,
+        default=None,
+        choices=["short", "medium", "long"],
+        help="Filter LongBench dataset by length category: 'short', 'medium', or 'long'. "
+        "If not specified, samples from all lengths.",
+    )
 
     prefix_repetition_group = parser.add_argument_group(
         "prefix repetition dataset options"
@@ -1698,6 +1706,16 @@ def get_samples(args, tokenizer) -> list[SampleRequest]:
             dataset_class = MMStarDataset
             args.hf_split = "val"
             args.hf_subset = None
+        elif (
+            args.dataset_path in LongBenchDataset.SUPPORTED_DATASET_PATHS
+            or args.hf_name in LongBenchDataset.SUPPORTED_DATASET_PATHS
+        ):
+            dataset_class = LongBenchDataset
+            args.hf_split = "train"
+            args.hf_subset = None
+            # Extract length_filter from args if provided
+            if hasattr(args, "longbench_length_filter") and args.longbench_length_filter:
+                hf_kwargs["length_filter"] = args.longbench_length_filter
         else:
             supported_datasets = set(
                 [
@@ -2270,6 +2288,127 @@ class ConversationDataset(HuggingFaceDataset):
                 )
             )
             ind += 1
+        self.maybe_oversample_requests(
+            sampled_requests, num_requests, request_id_prefix, no_oversample
+        )
+        return sampled_requests
+    
+class LongBenchDataset(HuggingFaceDataset):
+    """Dataset for LongBench-v2 QA data converted from multiple choice format."""
+
+    DEFAULT_OUTPUT_LEN = 256
+    SUPPORTED_DATASET_PATHS = {
+        "THUDM/LongBench-v2",
+    }
+
+    def sample(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        num_requests: int,
+        output_len: int | None = None,
+        enable_multimodal_chat: bool = False,
+        request_id_prefix: str = "",
+        no_oversample: bool = False,
+        length_filter: str | None = None,
+        **kwargs,
+    ) -> list:
+        """
+        Sample requests from LongBench dataset.
+        
+        Args:
+            tokenizer: Tokenizer for encoding prompts
+            num_requests: Number of requests to sample
+            output_len: Expected output length (default: 256)
+            enable_multimodal_chat: Whether to enable multimodal chat
+            request_id_prefix: Prefix for request IDs
+            no_oversample: Whether to skip oversampling
+            length_filter: Filter by length category: "short", "medium", "long", or None for all
+            **kwargs: Additional arguments
+        """
+        # Set default output length
+        output_len = output_len if output_len is not None else self.DEFAULT_OUTPUT_LEN
+        
+        # Filter data by length if specified
+        filtered_data = self.data
+        if length_filter is not None:
+            length_filter = length_filter.lower()
+            if length_filter not in ["short", "medium", "long"]:
+                raise ValueError(
+                    f"length_filter must be one of 'short', 'medium', 'long', or None, "
+                    f"got '{length_filter}'"
+                )
+            filtered_data = filtered_data.filter(
+                lambda x: x.get("length", "").lower() == length_filter
+            )
+        
+        sampled_requests = []
+        ind = 0
+
+        for item in filtered_data:
+            if len(sampled_requests) >= num_requests:
+                break
+            
+            # Handle two possible data formats:
+            # 1. Direct fields: question, choice_A/B/C/D, answer, context
+            # 2. Conversations format: conversations array
+            question = None
+            context = ""
+            
+            if "conversations" in item and len(item.get("conversations", [])) >= 2:
+                # Use conversations format
+                conv = item["conversations"]
+                prompt = conv[0]["value"]
+                # For QA format, we use the prompt as-is but remove multiple choice options
+                # The completion is not used as we want open-ended answers
+            elif "question" in item:
+                # Use direct fields format - convert from multiple choice to QA
+                context = item.get("context", "").strip()
+                question = item.get("question", "").strip()
+                choice_a = item.get("choice_A", "").strip()
+                choice_b = item.get("choice_B", "").strip()
+                choice_c = item.get("choice_C", "").strip()
+                choice_d = item.get("choice_D", "").strip()
+                answer_letter = item.get("answer", "").strip().upper()
+                
+                # Skip if required fields are missing
+                if not question:
+                    continue
+                
+                # Build prompt: context + question (converted from multiple choice to QA format)
+                if context:
+                    prompt = f"{context}\n\nQuestion: {question}\n\nPlease provide a detailed answer to this question."
+                else:
+                    prompt = f"Question: {question}\n\nPlease provide a detailed answer to this question."
+            else:
+                # Skip items that don't match either format
+                continue
+            
+            # Tokenize to get prompt length
+            prompt_ids = tokenizer(prompt).input_ids
+            prompt_len = len(prompt_ids)
+            
+            # Handle multimodal content if available
+            mm_content = None
+            if "image" in item:
+                mm_content = process_image(item["image"])
+            
+            if enable_multimodal_chat and mm_content:
+                # Note: when chat is enabled the request prompt_len is no longer
+                # accurate and we will be using request output to count the
+                # actual prompt len and output len
+                prompt = self.apply_multimodal_chat_transformation(prompt, mm_content)
+            
+            sampled_requests.append(
+                SampleRequest(
+                    prompt=prompt,
+                    prompt_len=prompt_len,
+                    expected_output_len=output_len,
+                    multi_modal_data=mm_content,
+                    request_id=request_id_prefix + str(ind),
+                )
+            )
+            ind += 1
+        
         self.maybe_oversample_requests(
             sampled_requests, num_requests, request_id_prefix, no_oversample
         )
