@@ -345,6 +345,7 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         
+        # time_start = time.time()
         if self.scheduler.long_request_execution_mode:
             # we have to sync the TP requests number across all the ranks
             TP_requests_counter = 0
@@ -360,9 +361,13 @@ class EngineCore:
                 TP_requests_counter
             )
             self.scheduler.TP_execute_number = TP_requests_number
-                
-        scheduler_output = self.scheduler.schedule()
         
+        # time_sync = time.time()
+        scheduler_output = self.scheduler.schedule()
+        # time_scheduler = time.time()
+        # if self.step_count % 30 == 0:
+        #     print(f"Sync time: {(time_scheduler - time_sync) * 1000}ms")
+        #     print(f"Scheduler time: {(time_scheduler - time_start) * 1000}ms")
         # for request in scheduler_output.scheduled_new_reqs:
         #     logger.info(f"dp rank {self.dp_rank} at step {self.step_count} scheduled new requests: {request.req_id}")
         
@@ -374,9 +379,13 @@ class EngineCore:
             # logger.info(f"Engine {self.engine_index} resetting DTP group state to False")
             self.collective_rpc("worker_set_dtp_group_state", args=(False,))
 
+        time_model = time.time()
         with self.log_error_detail(scheduler_output):
             model_output = self.model_executor.execute_model(scheduler_output)
             
+        time_update = time.time()
+        if self.step_count % 30 == 0:
+            print(f"Model time: {(time_update - time_model) * 1000}ms")
         # logger.info(f"dp rank {self.dp_rank} sampled_token_ids: {model_output.sampled_token_ids}")
 
         engine_core_outputs = self.scheduler.update_from_output(
