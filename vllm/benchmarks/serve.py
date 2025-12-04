@@ -230,7 +230,7 @@ def _get_current_request_rate_real_world(
     request_index: int,
     total_requests: int,
     peaks: list[dict] | None = None,
-    low_activity_rps: float = 10,
+    low_activity_rps: float = 3,
 ) -> float:
     """
     Calculate the current request rate for a real-world workload pattern
@@ -249,7 +249,7 @@ def _get_current_request_rate_real_world(
     if peaks is None:
         # Default: three peaks pattern similar to the first image
         peaks = [
-            {'start_ratio': 0.0, 'end_ratio': 0.2, 'peak_rps': 50.0, 'shape': 'gaussian'},
+            {'start_ratio': 0.0, 'end_ratio': 0.2, 'peak_rps': 20.0, 'shape': 'gaussian'},
             # {'start_ratio': 0.35, 'end_ratio': 0.50, 'peak_rps': 15.0, 'shape': 'gaussian'},
             # {'start_ratio': 0.50, 'end_ratio': 0.6, 'peak_rps': 80.0, 'shape': 'gaussian'},
         ]
