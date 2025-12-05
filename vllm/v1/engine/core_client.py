@@ -1138,7 +1138,7 @@ class DPAsyncMPClient(AsyncMPClient):
         )
         
     async def add_request_async(self, request: EngineCoreRequest) -> None:
-        work_mode = 'manipulated'
+        work_mode = 'tp_mode'
         if work_mode == 'original':
             await self.add_request_async_original(request)
         elif work_mode == 'traffic_load':
@@ -1187,9 +1187,9 @@ class DPAsyncMPClient(AsyncMPClient):
         # by defualt, we use all the engines
         chosen_engines = self.core_engines
 
-        max_step_count = 1000
+        max_step_count = 2000
         switch_start_steps = [int(max_step_count*x) for x in []]
-        switch_end_steps = [int(max_step_count*x) for x in [0.25]]
+        switch_end_steps = [int(max_step_count*x) for x in [0.6]]
         
         if self.step_count in switch_start_steps:
             request.switch_running_mode_flag = True
