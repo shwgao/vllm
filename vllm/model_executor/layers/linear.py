@@ -477,14 +477,7 @@ class LinearBase(CustomOp):
         try:
             yield
         finally:
-            # Restore original weight and bias when exiting the context (no copy, just reassign reference)
-            if self.shard_status:
-                self.weight.data = self.old_weight
-                if self.bias is not None:
-                    self.bias.data = self.old_bias
-                self.shard_status = False
-                self.old_weight = None
-                self.old_bias = None
+            pass
 
 
 @CustomOp.register("replicated_linear")
