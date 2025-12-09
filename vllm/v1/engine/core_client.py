@@ -1038,7 +1038,7 @@ class DPAsyncMPClient(AsyncMPClient):
         except RuntimeError:
             pass
         
-        self.step_count = -1 # for custom work mode(debugging)
+        self.step_count = 0 # for custom work mode(debugging)
         self.running_mode = 'DP' # for custom work mode(debugging)
 
     def _ensure_stats_update_task(self):
