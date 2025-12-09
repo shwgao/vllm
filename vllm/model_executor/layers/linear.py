@@ -427,7 +427,7 @@ class LinearBase(CustomOp):
                 self.weight.data = new_weight.to(self.weight.data.dtype).to(self.weight.data.device)
             
             # bias is also sharded
-            if not self.skip_bias_add and self.bias:
+            if not self.skip_bias_add and self.bias is not None:
                 sharded_biases = []
                 for start_idx, end_idx in zip(shard_start_indices, shard_end_indices):
                     sharded_biases.append(self.old_bias[start_idx:end_idx])

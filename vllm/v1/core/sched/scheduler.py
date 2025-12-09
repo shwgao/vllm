@@ -1022,16 +1022,17 @@ class Scheduler(SchedulerInterface):
                 if request.request_id not in self.pre_executed_TP_requests:
                     request.append_output_token_ids(merged[request.request_id][1])
                 
-                if len(merged[request.request_id][1]):
-                    # this request is finished, remove it from the waiting queue.
-                    request.status = RequestStatus.WAITING
-                    request.num_computed_tokens = 0
-                    request.num_preemptions += 1
-                    # Append output tokens. The num_output_tokens, num_tokens, and
-                    # num_tokens_with_spec properties will automatically return
-                    # the correct values based on the updated _output_token_ids
-                    # and _all_token_ids lists.
-                    request.reset_output_token_ids(merged[request.request_id][1])
+                # if len(merged[request.request_id][1]):
+                request.num_computed_tokens = 0
+                # Append output tokens. The num_output_tokens, num_tokens, and
+                # num_tokens_with_spec properties will automatically return
+                # the correct values based on the updated _output_token_ids
+                # and _all_token_ids lists.
+                request.reset_output_token_ids(merged[request.request_id][1])
+                    
+                # this request is finished, remove it from the waiting queue.
+                request.status = RequestStatus.WAITING
+                request.num_preemptions += 1
         
         
                     
