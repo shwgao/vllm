@@ -1187,9 +1187,9 @@ class DPAsyncMPClient(AsyncMPClient):
         # by defualt, we use all the engines
         chosen_engines = self.core_engines
 
-        max_step_count = 2000
-        switch_start_steps = [int(max_step_count*x) for x in [0.35]]
-        switch_end_steps = [int(max_step_count*x) for x in [0, 0.7]]
+        max_step_count = 1000
+        switch_start_steps = [int(max_step_count*x) for x in [0.4]]
+        switch_end_steps = [int(max_step_count*x) for x in [0, 0.55]]
         
         if self.step_count in switch_start_steps:
             request.switch_running_mode_flag = True

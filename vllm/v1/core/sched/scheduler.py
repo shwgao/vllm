@@ -570,7 +570,7 @@ class Scheduler(SchedulerInterface):
                         if self.waiting_switch_success_flag and request.long_request_engines == self.long_request_engines:
                             if self.dp_rank != self.long_request_engines[
                                 self.TP_wave_counter%len(self.long_request_engines)
-                                ]:
+                                ] and request.status == RequestStatus.WAITING:
                                 self.waiting.pop_request()
                                 self.TP_wave_counter += 1
                                 self.cached_TP_requests_order.add_request(request)
@@ -783,7 +783,7 @@ class Scheduler(SchedulerInterface):
                 elif request.status == RequestStatus.PREEMPTED:
                     scheduled_resumed_reqs.append(request)
                 else:
-                    raise RuntimeError(f"Invalid request status: {request.status}")
+                    raise RuntimeError(f"Invalid request {request.request_id} status: {request.status}")
 
                 if self.lora_config and request.lora_request:
                     scheduled_loras.add(request.lora_request.lora_int_id)
@@ -1003,6 +1003,8 @@ class Scheduler(SchedulerInterface):
             self.running.clear()
             
         # restore the waiting queue to want to execute the TP request.
+        # for request in self.cached_TP_requests_order:
+        #     logger.info(f"dp rank {self.dp_rank} prepend TP request: {request.request_id} with status: {request.status}")
         self.waiting.prepend_requests(self.cached_TP_requests_order)
         finished_reqs = []
         count = 0
@@ -1034,7 +1036,8 @@ class Scheduler(SchedulerInterface):
                 request.status = RequestStatus.WAITING
                 request.num_preemptions += 1
         
-        
+        for request in self.waiting:
+            logger.info(f"dp rank {self.dp_rank} waiting TP request: {request.request_id} with status: {request.status}")
                     
     def _preempt_TP_requests(self, scheduled_new_reqs: list[Request]) -> None:
         self.running.extend(scheduled_new_reqs)
@@ -1479,7 +1482,7 @@ class Scheduler(SchedulerInterface):
         #     if request.request_id in self.finished_req_ids:
         #         self.cached_TP_requests_order.remove_request(request)
         
-        if self.waiting_switch_success_flag == 'TP' and not self.last_request_before_switch:
+        if self.waiting_switch_success_flag == 'TP' and len(self.last_request_before_switch) == 0:
             if self.switch_method == 'sequential':
                 self.want_to_execute_long_request = True
                 # self.waiting_switch_success_flag = None
