@@ -1,0 +1,22 @@
+# prometheus.yaml
+# Configuration for Prometheus to scrape vLLM metrics
+# On Defiant cluster, you need to update the target hostname/IP where vLLM is running
+global:
+  scrape_interval: 5s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: vllm
+    static_configs:
+      - targets:
+          # IMPORTANT: Replace with your actual vLLM server hostname and port
+          # Examples:
+          #   - If vLLM is on the same node: 'localhost:8000'
+          #   - If vLLM is on another compute node: 'defiant01:8000'
+          #   - Using IP address: '10.0.0.1:8000'
+          #   - You can also use environment variable substitution if needed
+          - 'localhost:8000'
+        labels:
+          instance: vllm-server
+          job: vllm
+

@@ -1,0 +1,12 @@
+Bootstrap: docker
+From: grafana/grafana:latest
+
+%environment
+    export GF_PATHS_DATA=/var/lib/grafana
+    export GF_PATHS_LOGS=/var/log/grafana
+    export GF_PATHS_PLUGINS=/var/lib/grafana/plugins
+    export GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+
+%runscript
+    exec /run.sh
+

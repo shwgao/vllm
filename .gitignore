@@ -230,4 +230,10 @@ models/Qwen2.5-1.5B-Instruct/*
 vllm_profile*
 
 *results.txt
-z_tests/
+z_tests/bench-results/
+z_tests/grafana-results/
+z_tests/*.txt
+z_tests/prometheus_monitoring/*.sif
+z_tests/prometheus_monitoring/*.pid
+z_tests/prometheus_monitoring/*.txt
+z_tests/prometheus_monitoring/*.sl
