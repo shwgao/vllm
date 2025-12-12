@@ -21,7 +21,7 @@ VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm bench latency --model openai/gpt-oss-20b --
 export HF_HUB_OFFLINE=1
 
 # launch Meta-Llama-3-70B-Instruct TP mode
-VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 1 --tensor-parallel-size 8 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 2048 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 1 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 2048 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 
 # launch Meta-Llama-3-70B-Instruct DP mode
 VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 4 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
@@ -37,6 +37,8 @@ ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/mod
 
 # shift parallelism for gpt-oss-120b
 ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --tensor-parallel-size 1 --ulysses-sequence-parallel-size 4 --enable-shift-parallel --shift-parallel-threshold 512 --enforce-eager --gpu-memory-utilization 0.7 --port 8007 --max-num-batched-tokens 1024 --no-enable-prefix-caching
+
+HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a  --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 65000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 1024 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 ```
 
 ### Benchmarking the serving system

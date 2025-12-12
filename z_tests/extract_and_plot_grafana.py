@@ -601,6 +601,13 @@ class BaselineComparator:
         linestyles = {'ours': '-', 'TP': '--', 'DP': '-.', 
                       'shift_parallel': ':', 'Ours': '-'}
         
+        # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
+        for baseline in baseline_data.keys():
+            df = baseline_data[baseline]
+            df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 450)].copy()
+            df['relative_time'] = df['relative_time'] - df['relative_time'].min()
+            baseline_data[baseline] = df
+            
         for baseline, df in baseline_data.items():
             plt.plot(
                 df['relative_time'],
@@ -631,7 +638,18 @@ class BaselineComparator:
         if not title:
             title = metric_prefix.rstrip('_').replace('_', ' ')
         # plt.title(title, fontsize=self.font_size, fontweight='bold')
-        plt.legend(fontsize=self.font_size, loc='best')
+        
+        # only show legend for TTFT
+        if metric_prefix == 'Request_Prompt_Length_':
+            # legend shows on top of the plot box and lies horizontally
+            # Optimized: smaller font, better spacing, frame styling
+            plt.legend(fontsize=self.font_size-2, loc='lower center', 
+                      bbox_to_anchor=(0.5, 0.95), ncol=len(baselines),
+                      frameon=True, framealpha=0.9, fancybox=True, 
+                      columnspacing=1, handletextpad=0.5,
+                      borderpad=0.3, handlelength=1.5)
+
+        # plt.legend(fontsize=self.font_size, loc='best')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -879,11 +897,11 @@ def main():
                                 ('Inter_Token_Latency_P99_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_P50_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_Average_', 'linear', 'mean'),
-                                ('Time_To_First_Token_Latency_P90_', 'log', 'mean'),
-                                ('Time_To_First_Token_Latency_P95_', 'log', 'mean'),
-                                ('Time_To_First_Token_Latency_P99_', 'log', 'mean'),
-                                ('Time_To_First_Token_Latency_P50_', 'log', 'mean'),
-                                ('Time_To_First_Token_Latency_Average_', 'log', 'mean'),
+                                ('Time_To_First_Token_Latency_P90_', 'linear', 'mean'),
+                                ('Time_To_First_Token_Latency_P95_', 'linear', 'mean'),
+                                ('Time_To_First_Token_Latency_P99_', 'linear', 'mean'),
+                                ('Time_To_First_Token_Latency_P50_', 'linear', 'mean'),
+                                ('Time_To_First_Token_Latency_Average_', 'linear', 'mean'),
                                 ('Token_Throughput_', 'linear', 'sum'),
                                 ('Token_Throughput_Generation_', 'linear', 'sum'),
                                 ('Token_Throughput_Prompt_', 'linear', 'sum'),
@@ -959,6 +977,9 @@ def main():
                 'input=2000-4000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps10.0']
             },
         }    
+    
+    # just for testing on a single metric
+    # args.metrics = [('Time_To_First_Token_Latency_P90_', 'log', 'mean')]
     
     args.model_path = models[operating_model]
     args.output_dir = f'./z_tests/grafana-results/{operating_model}'
