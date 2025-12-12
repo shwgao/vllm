@@ -1187,7 +1187,7 @@ class DPAsyncMPClient(AsyncMPClient):
         # by defualt, we use all the engines
         chosen_engines = self.core_engines
 
-        max_step_count = 2000
+        max_step_count = 1000
         switch_start_steps = [int(max_step_count*x) for x in [0.38]]
         switch_end_steps = [int(max_step_count*x) for x in [0, 0.55]]
         

@@ -60,6 +60,8 @@ HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name sharegpt --datas
 # random worklaod
 HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model openai/gpt-oss-120b --num-prompts 2000 --random-input-len 2000 --random-output-len 256 --random-range-ratio 0.5 --test-real-world-workload --port 8007 --request-rate 1
 
+HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --num-prompts 2000 --random-input-len 1500 --random-output-len 128 --random-range-ratio 0.33 --test-real-world-workload --port 8007 --request-rate 1
+
 # sharegpt workload
 HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model openai/gpt-oss-120b --num-prompts 2000 --test-real-world-workload --port 8007 --request-rate 1
 
