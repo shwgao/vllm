@@ -601,12 +601,12 @@ class BaselineComparator:
         linestyles = {'ours': '-', 'TP': '--', 'DP': '-.', 
                       'shift_parallel': ':', 'Ours': '-'}
         
-        # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
-        for baseline in baseline_data.keys():
-            df = baseline_data[baseline]
-            df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 450)].copy()
-            df['relative_time'] = df['relative_time'] - df['relative_time'].min()
-            baseline_data[baseline] = df
+        # # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
+        # for baseline in baseline_data.keys():
+        #     df = baseline_data[baseline]
+        #     df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 450)].copy()
+        #     df['relative_time'] = df['relative_time'] - df['relative_time'].min()
+        #     baseline_data[baseline] = df
             
         for baseline, df in baseline_data.items():
             plt.plot(
@@ -934,7 +934,7 @@ def main():
         'Llama3-70B-Instruct': '/ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f',
         'gpt-oss-120b': '/ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a',
     }
-    operating_model = 'Llama3-70B-Instruct'
+    operating_model = 'gpt-oss-120b'
     args.lookup_table = {
         "shift_parallel": 
             {"time_ranges": 
@@ -976,7 +976,28 @@ def main():
                 'input=2000-4000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0',
                 'input=2000-4000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps10.0']
             },
-        }    
+        }   
+    
+    args.lookup_table = {
+        "Ours":
+            {"time_ranges":
+                ['{"from":"2025-12-12T18:04:55.563Z","to":"2025-12-12T18:09:49.559Z"}'],
+            'note':
+                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+            },
+        "TP":
+            {"time_ranges":
+                ['{"from":"2025-12-12T17:56:13.415Z","to":"2025-12-12T18:00:33.724Z"}'],
+            'note':
+                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+            },
+        "DP":
+            {"time_ranges":
+                ['{"from":"2025-12-12T18:15:06.037Z","to":"2025-12-12T18:20:27.703Z"}'],
+            'note':
+                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+            },
+        }   
     
     # just for testing on a single metric
     # args.metrics = [('Time_To_First_Token_Latency_P90_', 'log', 'mean')]
