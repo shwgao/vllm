@@ -422,9 +422,10 @@ class LinearBase(CustomOp):
             else:
                 new_weight = torch.cat(sharded_weights, dim=output_dim)
             
-            # Single copy: directly assign new_weight to weight.data
-            with torch.no_grad():
-                self.weight.data = new_weight.to(self.weight.data.dtype).to(self.weight.data.device)
+            self.weight.data = new_weight
+            # # Single copy: directly assign new_weight to weight.data
+            # with torch.no_grad():
+            #     self.weight.data = new_weight.to(self.weight.data.dtype).to(self.weight.data.device)
             
             # bias is also sharded
             if not self.skip_bias_add and self.bias is not None:
@@ -468,9 +469,10 @@ class LinearBase(CustomOp):
             if is_quantized:
                 sharded_weight = sharded_weight.t().contiguous().t()
             
-            # Single copy: directly assign sharded_weight to weight.data
-            with torch.no_grad():
-                self.weight.data = sharded_weight.to(self.weight.data.dtype).to(self.weight.data.device)
+            self.weight.data = sharded_weight
+            # # Single copy: directly assign sharded_weight to weight.data
+            # with torch.no_grad():
+            #     self.weight.data = sharded_weight.to(self.weight.data.dtype).to(self.weight.data.device)
         else:
             raise ValueError(f"Unimplemented DTP layer type: {type(self)}")
 

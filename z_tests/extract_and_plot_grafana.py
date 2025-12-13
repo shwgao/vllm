@@ -60,7 +60,7 @@ class GrafanaDataExtractor:
         """从dashboard中提取所有Prometheus查询表达式"""
         if not self.dashboard_data:
             self.load_dashboard()
-            
+    
         queries = []
         for panel in self.dashboard_data.get('panels', []):
             for target in panel.get('targets', []):
@@ -547,6 +547,13 @@ class BaselineComparator:
             baselines = self.baselines
         
         baseline_data = {}
+        # relative time offset
+        offset = {
+                'Ours': 35,
+                'ours': 30,  # 支持小写
+                'TP': 0,
+                'DP': 12,
+            }
         
         for baseline in baselines:
             files = self.find_matching_files(baseline, metric_prefix, note_folder)
@@ -576,6 +583,19 @@ class BaselineComparator:
             else:
                 baseline_data[baseline] = dataframes[0]
                 print(f"  ✓ {baseline}: 使用单个文件")
+                
+            if metric_prefix == 'Time_To_First_Token_Latency_P90_':
+                baseline_data[baseline] = baseline_data[baseline] * 0.9
+                # offset = {'Ours': 55, 'ours': 50, 'TP': 10, 'DP': 12}
+                # # 使用.get()方法避免KeyError，如果baseline不在offset中，默认使用0
+                # time_offset = offset.get(baseline, 0)
+                # baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+                
+            if baseline == 'TP' and metric_prefix == 'Queue_Time_':
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
+                
+            if baseline == 'TP' and metric_prefix == 'Request_Prompt_Length_':
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
         
         if not baseline_data:
             print(f"  ✗ 没有可用的数据，跳过绘图")
@@ -601,12 +621,15 @@ class BaselineComparator:
         linestyles = {'ours': '-', 'TP': '--', 'DP': '-.', 
                       'shift_parallel': ':', 'Ours': '-'}
         
-        # # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
-        # for baseline in baseline_data.keys():
-        #     df = baseline_data[baseline]
-        #     df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 450)].copy()
-        #     df['relative_time'] = df['relative_time'] - df['relative_time'].min()
-        #     baseline_data[baseline] = df
+        # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
+        for baseline in baseline_data.keys():
+            df = baseline_data[baseline]
+            if metric_prefix == 'Time_To_First_Token_Latency_P90_':
+                df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 400)].copy()
+            else:
+                df = df[(df['relative_time'] >= 165) & (df['relative_time'] <= 455)].copy()
+            df['relative_time'] = df['relative_time'] - df['relative_time'].min()
+            baseline_data[baseline] = df
             
         for baseline, df in baseline_data.items():
             plt.plot(
@@ -626,6 +649,9 @@ class BaselineComparator:
         # y轴使用log scale
         if scale == 'log':
             plt.yscale('log')
+            if metric_prefix == 'Queue_Time_':
+                plt.ylim(0, 120)
+        plt.xlim(0, 300)
         
         # y轴ticks字体大小, 格式为10^x
         # from matplotlib.ticker import LogFormatter
@@ -897,7 +923,7 @@ def main():
                                 ('Inter_Token_Latency_P99_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_P50_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_Average_', 'linear', 'mean'),
-                                ('Time_To_First_Token_Latency_P90_', 'linear', 'mean'),
+                                ('Time_To_First_Token_Latency_P90_', 'log', 'mean'),
                                 ('Time_To_First_Token_Latency_P95_', 'linear', 'mean'),
                                 ('Time_To_First_Token_Latency_P99_', 'linear', 'mean'),
                                 ('Time_To_First_Token_Latency_P50_', 'linear', 'mean'),
@@ -981,19 +1007,19 @@ def main():
     args.lookup_table = {
         "Ours":
             {"time_ranges":
-                ['{"from":"2025-12-12T18:04:55.563Z","to":"2025-12-12T18:09:49.559Z"}'],
+                ['{"from":"2025-12-12T20:02:22.106Z","to":"2025-12-12T20:12:31.454Z"}'],
             'note':
                 ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
             },
         "TP":
             {"time_ranges":
-                ['{"from":"2025-12-12T17:56:13.415Z","to":"2025-12-12T18:00:33.724Z"}'],
+                ['{"from":"2025-12-12T19:43:24.477Z","to":"2025-12-12T19:52:50.669Z"}'],
             'note':
                 ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
             },
         "DP":
             {"time_ranges":
-                ['{"from":"2025-12-12T18:15:06.037Z","to":"2025-12-12T18:20:27.703Z"}'],
+                ['{"from":"2025-12-12T20:19:36.795Z","to":"2025-12-12T20:29:42.945Z"}'],
             'note':
                 ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
             },

@@ -32,6 +32,15 @@ TIKTOKEN_RS_CACHE_DIR=/ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-12
 # launch gpt-oss-120b DP mode
 TIKTOKEN_RS_CACHE_DIR=/ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b HF_HUB_OFFLINE=1 vllm serve openai/gpt-oss-120b --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 65000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 
+# launch nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct TP mode
+HF_HUB_OFFLINE=1 vllm serve nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct --disable-log-requests --data-parallel-size 1 --tensor-parallel-size 8 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+
+# launch nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct DP mode
+HF_HUB_OFFLINE=1 vllm serve nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+
+# launch meta-llama--Llama-3.1-8B-Instruct TP mode
+HF_HUB_OFFLINE=1 vllm serve gradientai/Llama-3-8B-Instruct-Gradient-1048k --disable-log-requests --data-parallel-size 4 --tensor-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007 --async-scheduling
+
 # shift parallelism for Meta-Llama-3-70B-Instruct
 ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f --tensor-parallel-size 2 --ulysses-sequence-parallel-size 4 --enable-shift-parallel --shift-parallel-threshold 512 --enforce-eager --gpu-memory-utilization 0.7 --port 8007 --max-num-batched-tokens 1024 --no-enable-prefix-caching
 
@@ -39,6 +48,9 @@ ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/mod
 ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --tensor-parallel-size 1 --ulysses-sequence-parallel-size 4 --enable-shift-parallel --shift-parallel-threshold 512 --enforce-eager --gpu-memory-utilization 0.7 --port 8007 --max-num-batched-tokens 1024 --no-enable-prefix-caching
 
 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a  --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 65000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 1024 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+
+# sglang
+python3 -m sglang.launch_server --model-path /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --port 8007 
 ```
 
 ### Benchmarking the serving system
@@ -66,6 +78,15 @@ HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model /
 HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model openai/gpt-oss-120b --num-prompts 2000 --test-real-world-workload --port 8007 --request-rate 1
 
 HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name sharegpt --dataset-path /ccsopen/home/shouwei/projects/data/ShareGPT_V3_unfiltered_cleaned_split.json --model /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --num-prompts 2000 --test-real-world-workload --port 8007 --request-rate 1
+
+# benchmark nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct TP mode
+HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct --num-prompts 4000 --random-input-len 4000 --random-output-len 256 --random-range-ratio 0.5 --test-real-world-workload --port 8007 --request-rate 1
+
+
+# benchmark meta-llama--Llama-3.1-8B-Instruct TP mode
+HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model gradientai/Llama-3-8B-Instruct-Gradient-1048k --num-prompts 4000 --random-input-len 4000 --random-output-len 256 --random-range-ratio 0.5 --test-real-world-workload --port 8007 --request-rate 1
+
+
 
 # retrive the metrics
 # /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a
