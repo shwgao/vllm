@@ -2,19 +2,19 @@ model="llama-3-8b"
 model="llama-3-70b"
 model="gpt-oss-20b"
 mode="ours-DP-2"
-# mode="vanilla-DP"
+mode="vanilla-DP"
 # mode="vanilla-TP"
-TP=1
-DP=2
-MAX_MODEL_LEN=520000 
+TP=2
+DP=4
+MAX_MODEL_LEN=120000 
 OUTPUT_LEN=1
 
 # parameters list
 chunk_prefill_list=(8192)
-input_len_list=(128000) # (1000 2000 4000 8000 16000 32000 64000 128000)
+input_len_list=(1000 2000 4000 8000 16000 32000 64000 128000)
 request_rate_list=(300)
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 
 if [ "$model" == "llama-3-8b" ]; then
@@ -171,7 +171,7 @@ for chunk_prefill in "${chunk_prefill_list[@]}"; do
                 --random-output-len $OUTPUT_LEN \
                 --random-range-ratio 0 \
                 --request-rate $request_rate \
-                --num-prompts 500 \
+                --num-prompts 1000 \
                 --host $SERVER_HOST \
                 --port $SERVER_PORT 2>&1)
             
