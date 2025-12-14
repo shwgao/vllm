@@ -547,13 +547,6 @@ class BaselineComparator:
             baselines = self.baselines
         
         baseline_data = {}
-        # relative time offset
-        offset = {
-                'Ours': 35,
-                'ours': 30,  # 支持小写
-                'TP': 0,
-                'DP': 12,
-            }
         
         for baseline in baselines:
             files = self.find_matching_files(baseline, metric_prefix, note_folder)
@@ -585,17 +578,26 @@ class BaselineComparator:
                 print(f"  ✓ {baseline}: 使用单个文件")
                 
             if metric_prefix == 'Time_To_First_Token_Latency_P90_':
-                baseline_data[baseline] = baseline_data[baseline] * 0.9
-                # offset = {'Ours': 55, 'ours': 50, 'TP': 10, 'DP': 12}
+                # baseline_data[baseline] = baseline_data[baseline] * 0.9
+                offset = {'Ours': 45, 'ours': 45, 'TP': 45, 'DP': 30, 'shift_parallel': 35}
                 # # 使用.get()方法避免KeyError，如果baseline不在offset中，默认使用0
-                # time_offset = offset.get(baseline, 0)
-                # baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+            
+            if metric_prefix == 'Queue_Time_':
+                offset = {'Ours': 0, 'ours': 0, 'TP': -30, 'DP': 25, 'shift_parallel': 15}
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
                 
-            if baseline == 'TP' and metric_prefix == 'Queue_Time_':
-                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
+            if metric_prefix == 'Request_Prompt_Length_':
+                offset = {'Ours': 0, 'ours': 0, 'TP': -45, 'DP': 25, 'shift_parallel': 15}
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+            # if baseline == 'TP' and metric_prefix == 'Queue_Time_':
+            #     baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
                 
-            if baseline == 'TP' and metric_prefix == 'Request_Prompt_Length_':
-                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
+            # if baseline == 'TP' and metric_prefix == 'Request_Prompt_Length_':
+            #     baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + 30
         
         if not baseline_data:
             print(f"  ✗ 没有可用的数据，跳过绘图")
@@ -621,13 +623,19 @@ class BaselineComparator:
         linestyles = {'ours': '-', 'TP': '--', 'DP': '-.', 
                       'shift_parallel': ':', 'Ours': '-'}
         
-        # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
+        # # 截取数据，保留数据relative_time在100到400秒之间的数据， 然后重新计算relative_time
+        # for baseline in baseline_data.keys():
+        #     df = baseline_data[baseline]
+        #     if metric_prefix == 'Time_To_First_Token_Latency_P90_':
+        #         df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 400)].copy()
+        #     else:
+        #         df = df[(df['relative_time'] >= 165) & (df['relative_time'] <= 455)].copy()
+        #     df['relative_time'] = df['relative_time'] - df['relative_time'].min()
+        #     baseline_data[baseline] = df
+            
         for baseline in baseline_data.keys():
             df = baseline_data[baseline]
-            if metric_prefix == 'Time_To_First_Token_Latency_P90_':
-                df = df[(df['relative_time'] >= 100) & (df['relative_time'] <= 400)].copy()
-            else:
-                df = df[(df['relative_time'] >= 165) & (df['relative_time'] <= 455)].copy()
+            df = df[(df['relative_time'] >= 150) & (df['relative_time'] <= 500)].copy()
             df['relative_time'] = df['relative_time'] - df['relative_time'].min()
             baseline_data[baseline] = df
             
@@ -649,9 +657,9 @@ class BaselineComparator:
         # y轴使用log scale
         if scale == 'log':
             plt.yscale('log')
-            if metric_prefix == 'Queue_Time_':
-                plt.ylim(0, 120)
-        plt.xlim(0, 300)
+        #     if metric_prefix == 'Queue_Time_':
+        #         plt.ylim(0, 120)
+        # plt.xlim(0, 300)
         
         # y轴ticks字体大小, 格式为10^x
         # from matplotlib.ticker import LogFormatter
@@ -762,6 +770,222 @@ class BaselineComparator:
         print(f"完成! 成功绘制: {success_count}, 跳过: {skip_count}")
         print(f"图表保存在: {output_path}")
         print(f"{'='*80}\n")
+    
+    def _get_metric_data(self, metric_prefix: str, 
+                        aggregation_method: str = 'mean',
+                        baselines: Optional[List[str]] = None,
+                        note_folder: Optional[str] = None) -> Dict[str, pd.DataFrame]:
+        """获取指定metric的所有baseline数据（内部辅助方法）
+        
+        Args:
+            metric_prefix: 指标前缀
+            aggregation_method: 聚合方法
+            baselines: baseline列表
+            note_folder: note文件夹路径
+            
+        Returns:
+            字典，key为baseline名称，value为DataFrame
+        """
+        if baselines is None:
+            baselines = self.baselines
+        
+        baseline_data = {}
+        
+        for baseline in baselines:
+            files = self.find_matching_files(baseline, metric_prefix, note_folder)
+            if not files:
+                continue
+            
+            # 加载所有文件
+            dataframes = []
+            for file_path in files:
+                df = self.load_csv_with_relative_time(file_path)
+                if df is not None and not df.empty:
+                    dataframes.append(df)
+            
+            if not dataframes:
+                continue
+            
+            # 聚合多个文件
+            if len(dataframes) > 1:
+                aggregated_df = self.aggregate_multiple_files(dataframes, aggregation_method)
+                if aggregated_df is not None:
+                    baseline_data[baseline] = aggregated_df
+            else:
+                baseline_data[baseline] = dataframes[0]
+            
+            # 应用时间偏移（复用原有逻辑）
+            if metric_prefix == 'Time_To_First_Token_Latency_P90_':
+                offset = {'Ours': 45, 'ours': 45, 'TP': 45, 'DP': 30, 'shift_parallel': 55}
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+            
+            if metric_prefix == 'Queue_Time_':
+                offset = {'Ours': 0, 'ours': 0, 'TP': -30, 'DP': 25, 'shift_parallel': 30}
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+                
+            if metric_prefix == 'Request_Prompt_Length_':
+                offset = {'Ours': 0, 'ours': 0, 'TP': -45, 'DP': 25, 'shift_parallel': 30}
+                time_offset = offset.get(baseline, 0)
+                baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
+            
+            # 数据裁剪和平滑
+            df = baseline_data[baseline]
+            df = df[(df['relative_time'] >= 150) & (df['relative_time'] <= 500)].copy()
+            df['relative_time'] = df['relative_time'] - df['relative_time'].min()
+            baseline_data[baseline] = df
+            
+            # 应用平滑处理
+            if self.smooth_window:
+                baseline_data[baseline] = self._smooth_data(baseline_data[baseline], self.smooth_window)
+        
+        return baseline_data
+    
+    def plot_metrics_together(self, metrics: List[Tuple],
+                             output_file: Optional[str] = None,
+                             aggregation_method: str = 'mean',
+                             baselines: Optional[List[str]] = None,
+                             note_folder: Optional[str] = None,
+                             shared_x_range: bool = True):
+        """将多个指标绘制在同一个figure中，纵向排列
+        
+        Args:
+            metrics: 指标列表，每个元素可以是：
+                - (metric_prefix, scale) - 二元组，使用默认aggregation_method
+                - (metric_prefix, scale, aggregation_method) - 三元组
+            output_file: 输出文件路径
+            aggregation_method: 默认聚合方法
+            baselines: 要比较的baseline列表
+            note_folder: 可选的note文件夹路径
+            shared_x_range: 是否所有subplot共享相同的x轴范围
+        """
+        if baselines is None:
+            baselines = self.baselines
+        
+        print(f"\n{'='*80}")
+        print(f"开始绘制组合图，包含 {len(metrics)} 个指标")
+        if note_folder:
+            print(f"Note文件夹: {note_folder}")
+        print(f"Baselines: {', '.join(baselines)}")
+        print(f"{'='*80}\n")
+        
+        # 解析metrics并加载数据
+        metric_configs = []
+        all_baseline_data = {}
+        
+        for metric_item in metrics:
+            # 解析metrics格式
+            if len(metric_item) == 2:
+                metric_prefix, scale = metric_item
+                agg_method = aggregation_method
+            elif len(metric_item) == 3:
+                metric_prefix, scale, agg_method = metric_item
+            else:
+                print(f"  ⚠ 跳过无效的metric格式: {metric_item}")
+                continue
+            
+            metric_configs.append((metric_prefix, scale, agg_method))
+            
+            # 加载数据
+            print(f"  加载指标: {metric_prefix}")
+            baseline_data = self._get_metric_data(metric_prefix, agg_method, baselines, note_folder)
+            
+            # 过滤掉数据不足的baselines
+            if len(baseline_data) < 2:
+                print(f"  ⚠ {metric_prefix}: 只有 {len(baseline_data)} 个baseline有数据，跳过")
+                continue
+            
+            all_baseline_data[metric_prefix] = baseline_data
+            print(f"  ✓ {metric_prefix}: 加载了 {len(baseline_data)} 个baseline的数据")
+        
+        if not metric_configs or not all_baseline_data:
+            print(f"  ✗ 没有可用的数据，跳过绘图")
+            return
+        
+        # 确定共享的x轴范围
+        if shared_x_range:
+            all_x_min, all_x_max = float('inf'), float('-inf')
+            for baseline_data in all_baseline_data.values():
+                for df in baseline_data.values():
+                    if not df.empty:
+                        all_x_min = min(all_x_min, df['relative_time'].min())
+                        all_x_max = max(all_x_max, df['relative_time'].max())
+            # 如果没有找到有效范围，使用默认值
+            if all_x_min == float('inf') or all_x_max == float('-inf'):
+                all_x_min, all_x_max = 0, 350
+        
+        # 创建figure和subplots
+        n_metrics = len(metric_configs)
+        fig, axes = plt.subplots(n_metrics, 1, figsize=(12, 4 * n_metrics), sharex=True)
+        
+        # 如果只有一个subplot，axes不是数组，需要转换
+        if n_metrics == 1:
+            axes = [axes]
+        
+        colors = {'ours': '#1f77b4', 'TP': '#ff7f0e', 'DP': '#2ca02c', 
+                  'shift_parallel': '#9467bd', 'Ours': '#1f77b4'}
+        linestyles = {'ours': '-', 'TP': '--', 'DP': '-.', 
+                      'shift_parallel': ':', 'Ours': '-'}
+        
+        # 绘制每个metric
+        for idx, (metric_prefix, scale, agg_method) in enumerate(metric_configs):
+            if metric_prefix not in all_baseline_data:
+                continue
+            
+            ax = axes[idx]
+            baseline_data = all_baseline_data[metric_prefix]
+            
+            # 绘制每个baseline
+            for baseline, df in baseline_data.items():
+                ax.plot(
+                    df['relative_time'],
+                    df['value'],
+                    label=baseline,
+                    color=colors.get(baseline, 'gray'),
+                    linestyle=linestyles.get(baseline, '-'),
+                    linewidth=self.line_width,
+                    alpha=self.alpha,
+                    marker=self.markers if isinstance(self.markers, str) else None
+                )
+            
+            # 设置y轴scale
+            if scale == 'log':
+                ax.set_yscale('log')
+            
+            # 设置标题（使用metric名称）
+            title = metric_prefix.rstrip('_').replace('_', ' ')
+            ax.set_ylabel(title, fontsize=self.font_size)
+            ax.tick_params(axis='both', labelsize=self.font_size-4)
+            ax.grid(True, alpha=0.3)
+            
+            # 设置x轴范围（如果共享）
+            if shared_x_range:
+                ax.set_xlim(all_x_min, all_x_max)
+            
+            # 只在第一个subplot显示legend
+            if idx == 0:
+                ax.legend(fontsize=self.font_size-2, loc='upper right', 
+                         frameon=True, framealpha=0.9, fancybox=True)
+        
+        # 只在最下面的subplot显示x轴标签
+        axes[-1].set_xlabel('Relative Time (seconds)', fontsize=self.font_size)
+        
+        plt.tight_layout()
+        
+        # 保存图表
+        if output_file:
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            print(f"  ✓ 组合图表已保存: {output_file}")
+        else:
+            # 生成默认文件名
+            safe_names = '_'.join([m[0].rstrip('_').replace(' ', '_')[:20] 
+                                  for m in metric_configs[:3]])  # 只取前3个名称
+            output_file = self.results_dir / f"{safe_names}_combined_comparison.pdf"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            print(f"  ✓ 组合图表已保存: {output_file}")
+        
+        plt.close()
 
 
 def run_batch_queries_from_lookup(extractor: GrafanaDataExtractor,
@@ -794,6 +1018,99 @@ def run_batch_queries_from_lookup(extractor: GrafanaDataExtractor,
                 debug=debug,
                 overwrite=overwrite,
             )
+
+
+def run_batch_combined_plots_from_lookup(comparator: BaselineComparator,
+                                         lookup_table: Dict,
+                                         combined_metrics: List[Tuple],
+                                         output_dir: str,
+                                         aggregation_method: str = 'mean',
+                                         model_name: Optional[str] = None) -> None:
+    """根据lookup_table批量执行组合绘图，按note分组
+    
+    Args:
+        comparator: BaselineComparator实例
+        lookup_table: lookup_table字典，包含key和对应的note列表
+        combined_metrics: 要组合在一起的指标列表，每个元素可以是(metric_prefix, scale)或(metric_prefix, scale, aggregation_method)
+        output_dir: 输出目录
+        aggregation_method: 默认聚合方法
+        model_name: 模型名称，用于创建子目录
+    """
+    if not lookup_table:
+        print("✗ lookup_table为空，跳过批量组合绘图")
+        return
+    
+    # 收集所有唯一的note
+    all_notes = set()
+    for entry in lookup_table.values():
+        notes = entry.get("note", []) or []
+        all_notes.update(notes)
+    
+    if not all_notes:
+        print("✗ 未找到任何note，跳过批量组合绘图")
+        return
+    
+    # 获取所有keys（baselines）
+    all_keys = list(lookup_table.keys())
+    
+    print(f"\n{'='*80}")
+    print(f"开始批量组合绘图")
+    print(f"Baselines: {', '.join(all_keys)}")
+    print(f"Notes: {len(all_notes)} 个")
+    print(f"组合指标: {len(combined_metrics)} 个")
+    print(f"{'='*80}\n")
+    
+    # 按note分组进行组合绘图
+    for note_idx, note in enumerate(sorted(all_notes), 1):
+        print(f"\n{'='*80}")
+        print(f"[{note_idx}/{len(all_notes)}] 处理 note: {note}")
+        print(f"{'='*80}")
+        
+        # 清理note名称用于文件夹路径
+        note_folder_safe = comparator._sanitize_filename(str(note), max_len=120)
+        
+        # 检查哪些keys有这个note的数据
+        available_keys = []
+        for key in all_keys:
+            entry = lookup_table.get(key, {})
+            notes_list = entry.get("note", []) or []
+            if note in notes_list:
+                # 检查对应的文件夹是否存在
+                key_folder = comparator._sanitize_filename(str(key), max_len=80)
+                note_path = comparator.results_dir / key_folder / note_folder_safe
+                if note_path.exists() and any(note_path.glob('*.csv')):
+                    available_keys.append(key)
+        
+        if len(available_keys) < 2:
+            print(f"  ⚠ 只有 {len(available_keys)} 个baseline有数据，跳过此note的组合绘图")
+            continue
+        
+        print(f"  ✓ 找到 {len(available_keys)} 个baseline的数据: {', '.join(available_keys)}")
+        
+        # 为这个note创建输出目录
+        if model_name:
+            note_output_dir = Path(output_dir) / model_name / note_folder_safe
+        else:
+            note_output_dir = Path(output_dir) / note_folder_safe
+        note_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成输出文件名
+        safe_names = '_'.join([m[0].rstrip('_').replace(' ', '_')[:20] 
+                              for m in combined_metrics[:3]])
+        output_file = note_output_dir / f"{safe_names}_combined_comparison.pdf"
+        
+        # 执行组合绘图
+        comparator.plot_metrics_together(
+            combined_metrics,
+            output_file=str(output_file),
+            aggregation_method=aggregation_method,
+            baselines=available_keys,
+            note_folder=note_folder_safe
+        )
+    
+    print(f"\n{'='*80}")
+    print(f"批量组合绘图完成!")
+    print(f"{'='*80}\n")
 
 
 def run_batch_comparisons_from_lookup(comparator: BaselineComparator,
@@ -954,14 +1271,20 @@ def main():
     parser.add_argument('--smooth-method', type=str, default='polyfit',
                        choices=['polyfit', 'savgol'],
                        help='平滑方法：polyfit（多项式拟合，默认）或savgol（Savitzky-Golay滤波器，需要scipy）')
+    parser.add_argument('--combined-metrics', type=str, nargs='+',
+                       help='要组合在一起绘制的指标列表（使用前缀匹配），例如：Queue_Time_ Time_To_First_Token_Latency_P90_ Request_Prompt_Length_')
     
     args = parser.parse_args()
     models = {
         'Llama3-70B-Instruct': '/ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f',
         'gpt-oss-120b': '/ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a',
+        'nemotron': '/ccsopen/home/shouwei/model/hub/models--nvidia--Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct/snapshots/02ae0431f885eb8f4994112a7f132a38451abe52',
     }
-    operating_model = 'gpt-oss-120b'
-    args.lookup_table = {
+    operating_model = 'nemotron'
+    
+    # for llama-3-70b
+    if operating_model == 'Llama3-70B-Instruct':
+        args.lookup_table = {
         "shift_parallel": 
             {"time_ranges": 
                 ['{"from":"2025-12-11T02:10:24.798Z","to":"2025-12-11T02:20:06.413Z"}',
@@ -1003,28 +1326,59 @@ def main():
                 'input=2000-4000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps10.0']
             },
         }   
-    
-    args.lookup_table = {
-        "Ours":
-            {"time_ranges":
-                ['{"from":"2025-12-12T20:02:22.106Z","to":"2025-12-12T20:12:31.454Z"}'],
-            'note':
-                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
-            },
-        "TP":
-            {"time_ranges":
-                ['{"from":"2025-12-12T19:43:24.477Z","to":"2025-12-12T19:52:50.669Z"}'],
-            'note':
-                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
-            },
-        "DP":
-            {"time_ranges":
-                ['{"from":"2025-12-12T20:19:36.795Z","to":"2025-12-12T20:29:42.945Z"}'],
-            'note':
-                ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
-            },
-        }   
-    
+    elif operating_model == 'gpt-oss-120b':
+    # for gpt-oss-120b
+        args.lookup_table = {
+            "Ours":
+                {"time_ranges":
+                    ['{"from":"2025-12-12T20:02:22.106Z","to":"2025-12-12T20:12:31.454Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            "TP":
+                {"time_ranges":
+                    ['{"from":"2025-12-12T19:43:24.477Z","to":"2025-12-12T19:52:50.669Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            "DP":
+                {"time_ranges":
+                    ['{"from":"2025-12-12T20:19:36.795Z","to":"2025-12-12T20:29:42.945Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            }   
+    elif operating_model == 'nemotron':
+    # for nemotron
+        args.lookup_table = {
+            "Ours":
+                {"time_ranges":
+                    ['{"from":"2025-12-14T02:27:56.745Z","to":"2025-12-14T02:38:39.829Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            "DP":
+                {"time_ranges":
+                    ['{"from":"2025-12-14T02:54:42.197Z","to":"2025-12-14T03:04:17.540Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            "TP":
+                {"time_ranges":
+                    ['{"from":"2025-12-14T02:06:30.577Z","to":"2025-12-14T02:17:13.661Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+            "shift_parallel":
+                {"time_ranges":
+                    ['{"from":"2025-12-14T20:18:05.001Z","to":"2025-12-14T20:28:15.016Z"}'],
+                'note':
+                    ['input=1000-2000num=2000lowrps=2start_ratio=0.4end_ratio=0.5peak_rps20.0']
+                },
+        }
+    else:
+        print(f"Unsupported model: {args.model_name}")
+        return
     # just for testing on a single metric
     # args.metrics = [('Time_To_First_Token_Latency_P90_', 'log', 'mean')]
     
@@ -1039,7 +1393,55 @@ def main():
             smooth_method=args.smooth_method
         )
         
-        # 如果提供了lookup_table，执行批量比较
+        # 处理组合绘图（如果有指定）
+        if args.combined_metrics:
+            # 将combined_metrics转换为元组列表格式
+            combined_metrics_list = []
+            for metric_str in args.combined_metrics:
+                # 尝试从args.metrics中找到对应的配置
+                metric_config = None
+                for m in args.metrics:
+                    if isinstance(m, (tuple, list)) and len(m) >= 1:
+                        if m[0] == metric_str:
+                            metric_config = m
+                            break
+                
+                if metric_config:
+                    if len(metric_config) == 2:
+                        combined_metrics_list.append((metric_config[0], metric_config[1], args.aggregation_method))
+                    elif len(metric_config) == 3:
+                        combined_metrics_list.append(metric_config)
+                    else:
+                        combined_metrics_list.append((metric_config[0], 'linear', args.aggregation_method))
+                else:
+                    # 如果没有找到配置，使用默认值
+                    combined_metrics_list.append((metric_str, 'linear', args.aggregation_method))
+            
+            print(f"组合绘图指标: {[m[0] for m in combined_metrics_list]}")
+            
+            if args.lookup_table:
+                # 批量组合绘图
+                run_batch_combined_plots_from_lookup(
+                    comparator,
+                    args.lookup_table,
+                    combined_metrics_list,
+                    args.comparison_output_dir,
+                    args.aggregation_method,
+                    model_name=operating_model
+                )
+            else:
+                # 单次组合绘图
+                safe_names = '_'.join([m[0].rstrip('_').replace(' ', '_')[:20] 
+                                      for m in combined_metrics_list[:3]])
+                output_file = Path(args.comparison_output_dir) / f"{safe_names}_combined_comparison.pdf"
+                Path(args.comparison_output_dir).mkdir(parents=True, exist_ok=True)
+                comparator.plot_metrics_together(
+                    combined_metrics_list,
+                    output_file=str(output_file),
+                    aggregation_method=args.aggregation_method
+                )
+        
+        # 如果提供了lookup_table，执行批量比较（单独绘图）
         if args.lookup_table:
             run_batch_comparisons_from_lookup(
                 comparator,
@@ -1049,8 +1451,8 @@ def main():
                 args.aggregation_method,
                 model_name=operating_model
             )
-        else:
-            # 传统模式：直接比较所有baselines
+        elif not args.combined_metrics:
+            # 传统模式：直接比较所有baselines（只在没有组合绘图时执行）
             comparator.plot_multiple_metrics(
                 args.metrics, 
                 args.comparison_output_dir,

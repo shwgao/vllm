@@ -47,6 +47,9 @@ ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/mod
 # shift parallelism for gpt-oss-120b
 ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --tensor-parallel-size 1 --ulysses-sequence-parallel-size 4 --enable-shift-parallel --shift-parallel-threshold 512 --enforce-eager --gpu-memory-utilization 0.7 --port 8007 --max-num-batched-tokens 1024 --no-enable-prefix-caching
 
+# shift parallelism for nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct
+ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct --tensor-parallel-size 1 --ulysses-sequence-parallel-size 8 --enable-shift-parallel --shift-parallel-threshold 512 --enforce-eager --gpu-memory-utilization 0.7 --port 8007 --max-num-batched-tokens 8192 --no-enable-prefix-caching
+
 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a  --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 65000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 1024 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 
 # sglang
