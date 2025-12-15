@@ -20,7 +20,7 @@ peak_throughput = {
 }
 
 # Create figure with two subplots
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 4))
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
 # Set up bar positions
 x = np.arange(len(models))
@@ -29,7 +29,7 @@ positions = [x - 1.5*width, x - 0.5*width, x + 0.5*width, x + 1.5*width]
 
 # Colors for each method
 colors = {'Ours': '#1f77b4', 'TP': '#ff7f0e', 'DP': '#2ca02c', 'Shift-Parallel': '#9467bd'}
-font_size = 16
+font_size = 22
 
 # Plot Median TPOT
 for i, method in enumerate(methods):
@@ -44,11 +44,12 @@ for i, method in enumerate(methods):
 
 # ax1.set_xlabel('Model', fontsize=font_size)
 # ax1.set_ylabel('Median TPOT (ms)', fontsize=font_size)
-ax1.set_title('Median TPOT Comparison(ms)', fontsize=font_size, fontweight='bold')
+ax1.set_title('Median TPOT(ms)', fontsize=font_size, fontweight='bold')
 ax1.set_xticks(x)
 ax1.set_xticklabels(models, fontsize=font_size, ha='center')
-ax1.legend(loc='best')
+ax1.legend(loc='best', fontsize=font_size)
 ax1.grid(axis='y', alpha=0.3, linestyle='--')
+ax1.set_yticklabels(np.arange(0, 55, 10), fontsize=font_size)
 
 # Plot Peak Generation Throughput
 for i, method in enumerate(methods):
@@ -63,11 +64,12 @@ for i, method in enumerate(methods):
 
 # ax2.set_xlabel('Model', fontsize=12)
 # ax2.set_ylabel('Peak Generation Throughput (tokens/s)', fontsize=font_size)
-ax2.set_title('Peak Generation Throughput Comparison(tokens/s)', fontsize=font_size, fontweight='bold')
+ax2.set_title('Peak Generation Throughput(tokens/s)', fontsize=font_size, fontweight='bold')
 ax2.set_xticks(x)
-ax2.set_xticklabels(models, fontsize=font_size, ha='right')
-ax2.legend(loc='best')
+ax2.set_xticklabels(models, fontsize=font_size, ha='center')
+ax2.legend(loc='best', fontsize=font_size)
 ax2.grid(axis='y', alpha=0.3, linestyle='--')
+ax2.set_yticklabels(np.arange(0, 25000, 5000), fontsize=font_size)
 
 plt.tight_layout()
 plt.savefig('z_tests/comparison_plot.pdf', dpi=300, bbox_inches='tight')
