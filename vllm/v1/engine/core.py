@@ -345,22 +345,22 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         
-        # time_start = time.time()
-        if self.scheduler.long_request_execution_mode:
-            # we have to sync the TP requests number across all the ranks
-            TP_requests_counter = 0
-            for request in self.scheduler.waiting:
-                if len(request.long_request_engines) > 1:
-                    TP_requests_counter += 1
-                else:
-                    break
-            TP_requests_number = ParallelConfig.sync_TP_requests_number(
-                self.dp_group,
-                self.dp_size,
-                self.dp_rank,
-                TP_requests_counter
-            )
-            self.scheduler.TP_execute_number = TP_requests_number
+        # # time_start = time.time()
+        # if self.scheduler.long_request_execution_mode:
+        #     # we have to sync the TP requests number across all the ranks
+        #     TP_requests_counter = 0
+        #     for request in self.scheduler.waiting:
+        #         if len(request.long_request_engines) > 1:
+        #             TP_requests_counter += 1
+        #         else:
+        #             break
+        #     TP_requests_number = ParallelConfig.sync_TP_requests_number(
+        #         self.dp_group,
+        #         self.dp_size,
+        #         self.dp_rank,
+        #         TP_requests_counter
+        #     )
+        #     self.scheduler.TP_execute_number = TP_requests_number
         
         # time_sync = time.time()
         scheduler_output = self.scheduler.schedule()

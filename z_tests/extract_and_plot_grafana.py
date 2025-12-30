@@ -579,18 +579,33 @@ class BaselineComparator:
                 
             if metric_prefix == 'Time_To_First_Token_Latency_P90_':
                 # baseline_data[baseline] = baseline_data[baseline] * 0.9
-                offset = {'Ours': 45, 'ours': 45, 'TP': 45, 'DP': 30, 'shift_parallel': 35}
+                # # nemotron
+                # offset = {'Ours': 45, 'ours': 45, 'TP': 45, 'DP': 30, 'shift_parallel': 35}
+                # llama-3-70b
+                offset = {'Ours': 35, 'ours': 25, 'TP': 45, 'DP': 30, 'shift_parallel': 35}
+                # gpt-oss-120b
+                # offset = {'Ours': 30, 'ours': 30, 'TP': 15, 'DP': 35, 'shift_parallel': 15}
                 # # 使用.get()方法避免KeyError，如果baseline不在offset中，默认使用0
                 time_offset = offset.get(baseline, 0)
                 baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
             
             if metric_prefix == 'Queue_Time_':
-                offset = {'Ours': 0, 'ours': 0, 'TP': -30, 'DP': 25, 'shift_parallel': 15}
+                # nemotron
+                # offset = {'Ours': 0, 'ours': 0, 'TP': -30, 'DP': 25, 'shift_parallel': 15}
+                # llama-3-70b
+                # offset = {'Ours': 0, 'ours': 0, 'TP': 20, 'DP': 25, 'shift_parallel': 15}
+                # gpt-oss-120b
+                offset = {'Ours': -10, 'ours': -10, 'TP': 15, 'DP': 5, 'shift_parallel': 15}
                 time_offset = offset.get(baseline, 0)
                 baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
                 
             if metric_prefix == 'Request_Prompt_Length_':
-                offset = {'Ours': 0, 'ours': 0, 'TP': -45, 'DP': 25, 'shift_parallel': 15}
+                # nemotron
+                # offset = {'Ours': 0, 'ours': 0, 'TP': -45, 'DP': 25, 'shift_parallel': 15}
+                # llama-3-70b
+                # offset = {'Ours': 0, 'ours': 0, 'TP': 15, 'DP': 25, 'shift_parallel': 15}
+                # gpt-oss-120b
+                offset = {'Ours': 0, 'ours': 0, 'TP': 15, 'DP': 5, 'shift_parallel': 15}
                 time_offset = offset.get(baseline, 0)
                 baseline_data[baseline]['relative_time'] = baseline_data[baseline]['relative_time'] + time_offset
             # if baseline == 'TP' and metric_prefix == 'Queue_Time_':
@@ -616,7 +631,7 @@ class BaselineComparator:
                 baseline_data[baseline] = self._smooth_data(baseline_data[baseline], self.smooth_window)
         
         # 绘制对比图
-        plt.figure(figsize=(12, 4))
+        plt.figure(figsize=(10, 4))
         
         colors = {'ours': '#1f77b4', 'TP': '#ff7f0e', 'DP': '#2ca02c', 
                   'shift_parallel': '#9467bd', 'Ours': '#1f77b4'}
@@ -1240,7 +1255,7 @@ def main():
                                 ('Inter_Token_Latency_P99_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_P50_', 'linear', 'mean'),
                                 ('Inter_Token_Latency_Average_', 'linear', 'mean'),
-                                ('Time_To_First_Token_Latency_P90_', 'log', 'mean'),
+                                ('Time_To_First_Token_Latency_P90_', 'linear', 'mean'),
                                 ('Time_To_First_Token_Latency_P95_', 'linear', 'mean'),
                                 ('Time_To_First_Token_Latency_P99_', 'linear', 'mean'),
                                 ('Time_To_First_Token_Latency_P50_', 'linear', 'mean'),
@@ -1280,7 +1295,7 @@ def main():
         'gpt-oss-120b': '/ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a',
         'nemotron': '/ccsopen/home/shouwei/model/hub/models--nvidia--Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct/snapshots/02ae0431f885eb8f4994112a7f132a38451abe52',
     }
-    operating_model = 'nemotron'
+    operating_model = 'Llama3-70B-Instruct'
     
     # for llama-3-70b
     if operating_model == 'Llama3-70B-Instruct':

@@ -1274,9 +1274,8 @@ class DPAsyncMPClient(AsyncMPClient):
 
     async def add_request_async_tp_mode(self, request: EngineCoreRequest) -> None:
         self._ensure_stats_update_task()
-        self.step_count += 1
 
-        engine_indices = [0,1,2,3]
+        engine_indices = [0,1]
         chosen_engine = [self.core_engines[eng_index] for eng_index in engine_indices]
         if self.step_count in [0]:
             request.switch_running_mode_flag = True
@@ -1302,6 +1301,8 @@ class DPAsyncMPClient(AsyncMPClient):
             await self.first_req_send_socket.send(req_msg)
 
         self._ensure_output_queue_task()
+        
+        self.step_count += 1
         
 
     async def add_request_async_based_on_traffic_load(self, request: EngineCoreRequest) -> None:

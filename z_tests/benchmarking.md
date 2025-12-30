@@ -21,7 +21,8 @@ VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 vllm bench latency --model openai/gpt-oss-20b --
 export HF_HUB_OFFLINE=1
 
 # launch Meta-Llama-3-70B-Instruct TP mode
-VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 1 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 2048 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 2 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 8192 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
+VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f --disable-log-requests --data-parallel-size 4 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 40000 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 
 # launch Meta-Llama-3-70B-Instruct DP mode
 VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 HF_HUB_OFFLINE=1 vllm serve meta-llama/Meta-Llama-3-70B-Instruct --disable-log-requests --data-parallel-size 4 --tensor-parallel-size 2 --pipeline-parallel-size 1 --max-model-len 128000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 4096 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
@@ -53,7 +54,7 @@ ARCTIC_INFERENCE_ENABLED=1 HF_HUB_OFFLINE=1 vllm serve nvidia/Llama-3.1-Nemotron
 HF_HUB_OFFLINE=1 vllm serve /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a  --disable-log-requests --data-parallel-size 8 --tensor-parallel-size 1 --max-model-len 65000 --enforce-eager --gpu-memory-utilization 0.8 --max-num-batched-tokens 1024 --no-enable-prefix-caching --max_num_seqs 1000 --block-size 16 --port 8007
 
 # sglang
-python3 -m sglang.launch_server --model-path /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --port 8007 
+python3 -m sglang.launch_server --model-path /ccsopen/home/shouwei/model/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a --port 8007 --dp-size 8 --disable-cuda-graph --chunked-prefill-size 40000 --enable-metrics
 ```
 
 ### Benchmarking the serving system
@@ -63,7 +64,8 @@ python3 -m sglang.launch_server --model-path /ccsopen/home/shouwei/model/hub/mod
 
 # benchmark Meta-Llama-3-70B-Instruct
 # random worklaod
-HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model meta-llama/Meta-Llama-3-70B-Instruct --num-prompts 1000 --random-input-len 2000 --random-output-len 256 --random-range-ratio 0.2 --test-real-world-workload --port 8007 --request-rate 1
+HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model meta-llama/Meta-Llama-3-70B-Instruct --num-prompts 1000 --random-input-len 8000 --random-output-len 256 --random-range-ratio 0.2 --test-real-world-workload --port 8007 --request-rate 1
+HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model /ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f --num-prompts 1000 --random-input-len 8000 --random-output-len 256 --random-range-ratio 0.2 --port 8007 --request-rate 10
 
 # bench arctic inference
 HF_HUB_OFFLINE=1 vllm bench serve --backend vllm --dataset-name random --model /ccsopen/home/shouwei/model/hub/models--meta-llama--Meta-Llama-3-70B-Instruct/snapshots/50fd307e57011801c7833c87efa1984ddf2db42f --num-prompts 1000 --random-input-len 2000 --random-output-len 256 --random-range-ratio 0.5 --test-real-world-workload --port 8007 --request-rate 1
